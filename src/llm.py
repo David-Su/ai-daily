@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -36,7 +37,15 @@ def load_prompt(prompt_path: str, **kwargs) -> str:
 
 
 async def call_llm(prompt: str, config: Dict) -> str:
-    """调用LLM API - 统一使用OpenAI兼容接口"""
+    """调用LLM - 本地改为通过Codex CLI执行"""
+    # 原OpenAI兼容接口调用保留在 _call_openai_compatible() 中。
+    # 如需切回原实现，可改为：
+    # return await _call_openai_compatible(prompt, config)
+    return await _call_codex_cli(prompt)
+
+
+async def _call_openai_compatible(prompt: str, config: Dict) -> str:
+    """调用OpenAI兼容的Chat Completions接口"""
     model = config.get("model", "gpt-4o-mini")
     base_url = config.get("baseUrl", "https://api.openai.com/v1")
     api_key_name = config.get("apiKeyName", "OPENAI_API_KEY")
@@ -68,6 +77,77 @@ async def call_llm(prompt: str, config: Dict) -> str:
 
             data = await resp.json()
             return data["choices"][0]["message"]["content"]
+
+
+async def _call_codex_cli(prompt: str) -> str:
+    """通过本地Codex CLI调用模型，并返回最终消息文本"""
+    command = "codex"
+    model = "gpt-5.5"
+    sandbox = "read-only"
+    workdir = str(Path(__file__).resolve().parent.parent)
+    timeout_seconds = 600
+
+    output_file = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", prefix="ai-daily-codex-", suffix=".txt", delete=False
+    )
+    output_path = output_file.name
+    output_file.close()
+
+    args = [
+        command,
+        "exec",
+        "--sandbox",
+        sandbox,
+        "--ephemeral",
+        "--ignore-rules",
+        "-o",
+        output_path,
+        "-m",
+        model,
+        "-C",
+        workdir,
+    ]
+    args.append("-")
+
+    process = None
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(prompt.encode("utf-8")),
+                timeout=timeout_seconds,
+            )
+        except asyncio.TimeoutError as exc:
+            process.kill()
+            await process.wait()
+            raise RuntimeError(f"Codex CLI调用超时({timeout_seconds}s)") from exc
+
+        if process.returncode != 0:
+            stdout_text = stdout.decode("utf-8", errors="replace").strip()
+            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+            detail = stderr_text or stdout_text or "无错误输出"
+            raise RuntimeError(f"Codex CLI错误: {process.returncode} - {detail}")
+
+        content = Path(output_path).read_text(encoding="utf-8").strip()
+        if not content:
+            stdout_text = stdout.decode("utf-8", errors="replace").strip()
+            raise RuntimeError(f"Codex CLI返回空响应: {stdout_text[:200]}")
+
+        return content
+    finally:
+        if process and process.returncode is None:
+            process.kill()
+            await process.wait()
+        try:
+            Path(output_path).unlink()
+        except FileNotFoundError:
+            pass
 
 
 async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:
@@ -238,7 +318,7 @@ async def _score_single_batch(
         if not isinstance(results, list):
             raise ValueError(f"LLM返回的不是数组: {type(results)}")
 
-        return _reconcile_batch_results(entries, results[:-2], batch_index)
+        return _reconcile_batch_results(entries, results, batch_index)
 
     except Exception as e:
         error_message = f"批次{batch_index + 1} 评分失败: {e}"
