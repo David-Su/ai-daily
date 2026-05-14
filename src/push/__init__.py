@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from .base import PushPlatform
 from .discord import DiscordPlatform
 from .feishu import FeishuPlatform
+from .gmail import GmailPlatform
 
 
 def create_platform(name: str, config: Dict) -> Optional[PushPlatform]:
@@ -12,6 +13,7 @@ def create_platform(name: str, config: Dict) -> Optional[PushPlatform]:
     platforms = {
         "discord": DiscordPlatform,
         "feishu": FeishuPlatform,
+        "gmail": GmailPlatform,
     }
 
     if name not in platforms:

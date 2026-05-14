@@ -244,6 +244,13 @@ JSON 格式:
     "feishu": {
       "enabled": false,
       "apiKeyName": "FEISHU_WEBHOOK_URL"
+    },
+    "gmail": {
+      "enabled": false,
+      "usernameKeyName": "GMAIL_USERNAME",
+      "passwordKeyName": "GMAIL_APP_PASSWORD",
+      "toKeyName": "GMAIL_TO",
+      "fromName": "AI Daily"
     }
   }
 }
@@ -267,6 +274,11 @@ JSON 格式:
 | LLM API Key | `OPENROUTER_API_KEY` | 在 `llm.apiKeyName` 中指定 |
 | Discord Webhook | `DISCORD_WEBHOOK_URL` | 在 `push.discord.apiKeyName` 中指定 |
 | 飞书 Webhook | `FEISHU_WEBHOOK_URL` | 在 `push.feishu.apiKeyName` 中指定 |
+| Gmail 发件账号 | `GMAIL_USERNAME` | 在 `push.gmail.usernameKeyName` 中指定 |
+| Gmail App Password | `GMAIL_APP_PASSWORD` | 在 `push.gmail.passwordKeyName` 中指定 |
+| Gmail 收件人 | `GMAIL_TO` | 在 `push.gmail.toKeyName` 中指定 |
+
+Gmail 推送邮件使用 `multipart/alternative`，同时包含纯文本 Markdown 和渲染后的 HTML 正文。
 
 ## 目录结构
 

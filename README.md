@@ -3,7 +3,7 @@
 
 ![AI Daily Banner](https://cdn.yeekal.com/yee/blog/2026-03/ai-daily-cover-wide-ultra.webp)
 
-<p align="center">AI 驱动的 RSS 新闻聚合与推送系统 | 支持 400+ 信息源 | LLM 智能评分 | 推送到 Discord/飞书</p>
+<p align="center">AI 驱动的 RSS 新闻聚合与推送系统 | 支持 400+ 信息源 | LLM 智能评分 | 推送到 Discord/飞书/Gmail</p>
 
 
 
@@ -63,6 +63,11 @@ FEISHU_WEBHOOK_URL=your_feishu_webhook_url_here
 
 # Or Discord Webhook
 # DISCORD_WEBHOOK_URL=your_webhook_url_here
+
+# Or Gmail SMTP
+# GMAIL_USERNAME=your_email@gmail.com
+# GMAIL_APP_PASSWORD=your_16_digit_app_password
+# GMAIL_TO=receiver@example.com
 ```
 
 在 `config.json` 中修改 `llm` 和 `push`
@@ -79,6 +84,13 @@ FEISHU_WEBHOOK_URL=your_feishu_webhook_url_here
         "feishu": {
             "enabled": true,
             "apiKeyName": "FEISHU_WEBHOOK_URL"
+        },
+        "gmail": {
+            "enabled": false,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "toKeyName": "GMAIL_TO",
+            "fromName": "AI Daily"
         }
     },
 
@@ -98,6 +110,12 @@ FEISHU_WEBHOOK_URL=your_feishu_webhook_url_here
 1. 进入 Discord 服务器设置 → 
 2. 整合 → Webhooks
 2. 创建新 Webhook，复制 URL
+
+**获取 Gmail App Password：**
+1. 确保 Google 账号已开启两步验证
+2. 进入 Google 账号 → 安全性 → 应用专用密码
+3. 创建应用专用密码，并填入 `GMAIL_APP_PASSWORD`
+4. 将发件邮箱填入 `GMAIL_USERNAME`，收件人填入 `GMAIL_TO`
 
 
 ### 4. 运行程序
@@ -186,6 +204,13 @@ python -m src.main
         "feishu": {
             "enabled": false,
             "apiKeyName": "FEISHU_WEBHOOK_URL"
+        },
+        "gmail": {
+            "enabled": false,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "toKeyName": "GMAIL_TO",
+            "fromName": "AI Daily"
         }
     }
 }
@@ -257,6 +282,16 @@ python -m src.main
 | `discord.apiKeyName` | string | Discord Webhook 的环境变量名 |
 | `feishu.enabled` | boolean | 是否启用飞书推送 |
 | `feishu.apiKeyName` | string | 飞书 Webhook 的环境变量名 |
+| `gmail.enabled` | boolean | 是否启用 Gmail SMTP 推送 |
+| `gmail.usernameKeyName` | string | Gmail 发件账号的环境变量名 |
+| `gmail.passwordKeyName` | string | Gmail App Password 的环境变量名 |
+| `gmail.to` | string/array | 收件人邮箱，支持逗号分隔字符串或数组 |
+| `gmail.toKeyName` | string | 收件人邮箱的环境变量名，未配置 `to` 时使用 |
+| `gmail.fromName` | string | 邮件发件人显示名称 |
+| `gmail.smtpHost` | string | SMTP 服务地址，默认 `smtp.gmail.com` |
+| `gmail.smtpPort` | number | SMTP 端口，默认 `587` |
+
+Gmail 推送会同时发送纯文本和 HTML 两种邮件正文。原始 Markdown 会保留为纯文本兜底，Gmail 正常显示时会优先展示渲染后的 HTML。
 
 ---
 

@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from push.discord import DiscordPlatform
 from push.feishu import FeishuPlatform
+from push.gmail import GmailPlatform
 from push import create_platform
 
 
@@ -161,6 +162,156 @@ class TestFeishuPlatform:
             assert platform.validate_config(config) is True
 
 
+class TestGmailPlatform:
+    """测试 Gmail 推送"""
+
+    def test_validate_config_valid(self):
+        config = {
+            "enabled": True,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "to": ["receiver@example.com"],
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "GMAIL_USERNAME": "sender@gmail.com",
+                "GMAIL_APP_PASSWORD": "app-password",
+            },
+        ):
+            platform = GmailPlatform(config)
+            assert platform.validate_config(config) is True
+
+    def test_validate_config_disabled(self):
+        config = {
+            "enabled": False,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "to": ["receiver@example.com"],
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "GMAIL_USERNAME": "sender@gmail.com",
+                "GMAIL_APP_PASSWORD": "app-password",
+            },
+        ):
+            platform = GmailPlatform(config)
+            assert platform.validate_config(config) is False
+
+    def test_validate_config_missing_credentials(self):
+        config = {
+            "enabled": True,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "to": ["receiver@example.com"],
+        }
+        with patch.dict(
+            os.environ,
+            {"GMAIL_USERNAME": "", "GMAIL_APP_PASSWORD": ""},
+        ):
+            platform = GmailPlatform(config)
+            assert platform.validate_config(config) is False
+
+    def test_validate_config_to_from_env(self):
+        config = {
+            "enabled": True,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "toKeyName": "GMAIL_TO",
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "GMAIL_USERNAME": "sender@gmail.com",
+                "GMAIL_APP_PASSWORD": "app-password",
+                "GMAIL_TO": "one@example.com,two@example.com",
+            },
+        ):
+            platform = GmailPlatform(config)
+            assert platform.validate_config(config) is True
+            assert platform._get_recipients() == [
+                "one@example.com",
+                "two@example.com",
+            ]
+
+    def test_validate_config_invalid_smtp_port(self):
+        config = {
+            "enabled": True,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "to": ["receiver@example.com"],
+            "smtpPort": "invalid",
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "GMAIL_USERNAME": "sender@gmail.com",
+                "GMAIL_APP_PASSWORD": "app-password",
+            },
+        ):
+            platform = GmailPlatform(config)
+            assert platform.validate_config(config) is False
+
+    def test_build_message(self):
+        config = {
+            "enabled": True,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "to": "receiver@example.com",
+            "cc": ["copy@example.com"],
+            "fromName": "AI Daily Bot",
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "GMAIL_USERNAME": "sender@gmail.com",
+                "GMAIL_APP_PASSWORD": "app-password",
+            },
+        ):
+            platform = GmailPlatform(config)
+            message = platform._build_message("**Hello**", "Daily News")
+
+        assert message["Subject"] == "Daily News"
+        assert message["From"] == "AI Daily Bot <sender@gmail.com>"
+        assert message["To"] == "receiver@example.com"
+        assert message["Cc"] == "copy@example.com"
+        assert message.get_body(("plain",)).get_content().strip() == "**Hello**"
+
+        html_body = message.get_body(("html",)).get_content()
+        assert "<strong>Hello</strong>" in html_body
+        assert "AI Daily Bot" not in html_body
+
+    def test_send_sync_success(self):
+        config = {
+            "enabled": True,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "to": ["receiver@example.com"],
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "GMAIL_USERNAME": "sender@gmail.com",
+                "GMAIL_APP_PASSWORD": "app-password",
+            },
+        ), patch("push.gmail.smtplib.SMTP") as mock_smtp:
+            smtp = mock_smtp.return_value.__enter__.return_value
+            platform = GmailPlatform(config)
+            platform._send_sync("Hello", "Daily News")
+
+        mock_smtp.assert_called_once_with("smtp.gmail.com", 587, timeout=30)
+        smtp.starttls.assert_called_once()
+        smtp.login.assert_called_once_with("sender@gmail.com", "app-password")
+        smtp.send_message.assert_called_once()
+        message = smtp.send_message.call_args.args[0]
+        assert message["Subject"] == "Daily News"
+        assert message.get_body(("html",)) is not None
+        assert smtp.send_message.call_args.kwargs["to_addrs"] == [
+            "receiver@example.com"
+        ]
+
+
 class TestPushFactory:
     """测试平台工厂"""
 
@@ -207,3 +358,21 @@ class TestPushFactory:
             platform = create_platform("discord", config)
             assert platform is not None
             assert isinstance(platform, DiscordPlatform)
+
+    def test_create_gmail_platform(self):
+        config = {
+            "enabled": True,
+            "usernameKeyName": "GMAIL_USERNAME",
+            "passwordKeyName": "GMAIL_APP_PASSWORD",
+            "to": ["receiver@example.com"],
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "GMAIL_USERNAME": "sender@gmail.com",
+                "GMAIL_APP_PASSWORD": "app-password",
+            },
+        ):
+            platform = create_platform("gmail", config)
+            assert platform is not None
+            assert isinstance(platform, GmailPlatform)

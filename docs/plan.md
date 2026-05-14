@@ -27,8 +27,15 @@
 | 状态追踪 | 文件时间戳 | 无需外部数据库 |
 | RSS延迟防护 | fetch_lookback_minutes | 防止RSS延迟导致漏读 |
 | LLM异常通知 | 调用方统一上报 | 避免批次级刷屏，同时保留关键异常通知 |
+| Gmail推送 | SMTP + App Password | 不引入额外依赖，适合个人邮箱接收推送 |
 
 ## 开发进度
+
+**2026-05-14**
+- 新增 Gmail SMTP 推送平台：支持 App Password、收件人环境变量、cc/bcc 与默认 Gmail SMTP 配置
+- 优化 Gmail 邮件正文：同时发送纯文本 Markdown 与渲染后的 HTML，避免 Gmail 中只显示原文
+- 更新 `config.json`、`.env.example`、README 与技术规格文档中的 Gmail 推送配置说明
+- 补充 Gmail 推送平台配置校验、邮件构建、发送调用与工厂注册测试
 
 **2026-03-08**
 - 新增 LLM 异常通知：`compose_digest`、`generate_immediate_push` 与 `score_batch` 的错误会通过现有推送渠道发送简单告警
