@@ -1,0 +1,10 @@
+services:
+  ai-daily:
+    image: ai-daily
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./news-data:/app/news-data
