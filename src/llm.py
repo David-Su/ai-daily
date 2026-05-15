@@ -40,6 +40,8 @@ async def call_llm(prompt: str, config: Dict) -> str:
     model = config.get("model", "gpt-4o-mini")
     base_url = config.get("baseUrl", "https://api.openai.com/v1")
     api_key_name = config.get("apiKeyName", "OPENAI_API_KEY")
+    max_retries = config.get("max_retries", 3)
+    retry_statuses = {404, 429, 500, 502, 503, 504}
 
     api_key = os.environ.get(api_key_name)
     if not api_key:
@@ -60,14 +62,27 @@ async def call_llm(prompt: str, config: Dict) -> str:
 
     url = f"{base_url}/chat/completions"
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, json=payload) as resp:
-            if resp.status != 200:
-                text = await resp.text()
-                raise RuntimeError(f"LLM API错误: {resp.status} - {text}")
+    last_error = None
 
-            data = await resp.json()
-            return data["choices"][0]["message"]["content"]
+    def generate_error(msg):
+        return RuntimeError(f"LLM API错误: {msg}")
+
+    async with aiohttp.ClientSession() as session:
+        for attempt in range(max_retries):
+            async with session.post(url, headers=headers, json=payload) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    last_error = generate_error(f"{resp.status} - {text}")
+                    if resp.status in retry_statuses and attempt < max_retries - 1:
+                        print(f"⚠️ LLM API错误{resp.status}: 第{attempt + 1}次重试")
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    raise last_error
+
+                data = await resp.json()
+                return data["choices"][0]["message"]["content"]
+
+    raise last_error
 
 
 async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:

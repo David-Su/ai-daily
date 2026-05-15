@@ -24,6 +24,7 @@
         "apiKeyName": "OPENAI_API_KEY",
         "max_prompt_chars": 64000,
         "max_concurrent_batches": 3,
+        "max_retries": 3,
         "prompts": {
             "score_batch": "prompts/score_batch.md",
             "immediate_push": "prompts/immediate_push.md",
