@@ -222,14 +222,17 @@ async def run_llm_test():
         context_days = config.get("filter", {}).get("context_days", 3)
         from src.storage import (
             get_notify_file,
-            load_recent_notify_content,
-            load_recent_push_content,
+            load_recent_notify_titles,
+            load_recent_push_titles,
             save_notify_file,
         )
 
-        recent_notify = load_recent_notify_content(context_days)
-        recent_push = load_recent_push_content(context_days)
-        recent_context = f"=== 近期即时推送 ===\n{recent_notify}\n\n=== 近期汇总推送 ===\n{recent_push}"
+        recent_notify = load_recent_notify_titles(context_days)
+        recent_push = load_recent_push_titles(context_days)
+        recent_context = (
+            f"=== 近期即时推送事件 ===\n{recent_notify}\n\n"
+            f"=== 近期汇总推送事件 ===\n{recent_push}"
+        )
 
         try:
             # 传入上下文参数
@@ -286,9 +289,9 @@ async def run_llm_test():
 
         # 加载近期推送上下文
         push_context_days = config.get("filter", {}).get("push_context_days", 5)
-        from src.storage import get_push_file, load_recent_push_content, save_push_file
+        from src.storage import get_push_file, load_recent_push_titles, save_push_file
 
-        recent_push_context_str = load_recent_push_content(push_context_days)
+        recent_push_context_str = load_recent_push_titles(push_context_days)
 
         try:
             digest_content = await compose_digest(

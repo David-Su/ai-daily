@@ -33,10 +33,13 @@
 
 ## 开发进度
 
+**2026-05-15**
+- 优化提示词，修复长时运行下的新闻报告措辞趋同问题
+
 **2026-05-14**
 - [x] 外置定时（已切换到 systemd timer）
 - [x] 系统服务一键运行（`scripts/install.sh`）
-- 实用uv进行python项目管理
+- 使用uv进行python项目管理
 - 配置变更：`config.json` 新增 `log.retention_days` 字段
 - 新增 `daily-news` 系统级包装脚本：装在 `/usr/local/bin/daily-news`，提供 `start/stop/restart/status/logs` 等命令，封装 systemctl/journalctl 调用细节
 
