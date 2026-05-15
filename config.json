@@ -22,8 +22,8 @@
         "model": "gpt-5.5",
         "baseUrl": "http://170.106.159.162:3036/v1",
         "apiKeyName": "OPENAI_API_KEY",
-        "max_prompt_chars": 64000,
-        "max_concurrent_batches": 3,
+        "max_prompt_chars": 20000,
+        "max_concurrent_batches": 2,
         "max_retries": 3,
         "prompts": {
             "score_batch": "prompts/score_batch.md",
