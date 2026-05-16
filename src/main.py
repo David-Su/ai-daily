@@ -34,8 +34,8 @@ from src.storage import (
     get_notify_file,
     get_push_file,
     load_existing_links,
-    load_recent_notify_content,
-    load_recent_push_content,
+    load_recent_notify_titles,
+    load_recent_push_titles,
     read_entries,
     save_notify_file,
     save_push_file,
@@ -238,11 +238,14 @@ async def run_fetch_job(config: Dict):
     if hot_entries:
         print(f"🔥 发现 {len(hot_entries)} 条热点消息，即时推送...")
 
-        # 加载近期推送上下文用于去重
+        # 加载近期已推送事件清单（仅供 LLM 查重，避免风格趋同）
         context_days = config["filter"]["context_days"]
-        recent_notify = load_recent_notify_content(context_days)
-        recent_push = load_recent_push_content(context_days)
-        recent_context = f"=== 近期即时推送 ===\n{recent_notify}\n\n=== 近期汇总推送 ===\n{recent_push}"
+        recent_notify = load_recent_notify_titles(context_days)
+        recent_push = load_recent_push_titles(context_days)
+        recent_context = (
+            f"=== 近期即时推送事件 ===\n{recent_notify}\n\n"
+            f"=== 近期汇总推送事件 ===\n{recent_push}"
+        )
 
         push_content, immediate_push_error = await generate_immediate_push(
             hot_entries, config["llm"], recent_push_context=recent_context
@@ -306,9 +309,9 @@ async def run_push_job(config: Dict):
 
     print(f"✅ 符合推送标准(≥{min_score}分): {len(to_push)} 条")
 
-    # 加载近期推送上下文用于去重
+    # 加载近期已推送事件清单（仅供 LLM 查重，避免风格趋同）
     push_context_days = config["filter"].get("push_context_days", 5)
-    recent_push_context_str = load_recent_push_content(push_context_days)
+    recent_push_context_str = load_recent_push_titles(push_context_days)
 
     print("🤖 生成推送内容...")
     try:
