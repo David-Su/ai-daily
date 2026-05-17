@@ -415,37 +415,74 @@ async def generate_trend_insights(
 
 合计 5 次 / 早报。晚报维持现有 1 次。
 
-### 6.2 Prompt 文件
+### 6.2 关注领域（GitHub / HN 共用）
+
+为避免领域定义在 3 个 prompt 里漂移，统一在此沉淀；各 prompt 在自身骨架里直接引用本节，不做重新发明。
+
+**正面关注**：
+
+- **AI Agent**：智能体架构、工具链、多智能体、自主规划、Agent 框架
+- **AI 模型**：训练、推理、微调、量化部署、模型服务、语音 / 多模态 / 视觉模型
+- **AI 基础设施**：GPU 调度、芯片硬件、数据中心、推理优化、分布式训练、向量数据库、RAG 框架
+- **大厂 / 前沿动态**：Apple、Google、Meta、OpenAI、Anthropic、Microsoft、xAI 等公司的官方动作与战略
+- **AI 集成的开发者工具**：API 网关、自动化脚本、低代码平台等明确与 AI 协同的工具
+- **有创新性的开源产品**：日增长显著且有清晰用户价值（GH 板块专属）
+
+**负面排除（一律剔除）**：
+
+- 嵌入式开发（Arduino、ESP32、树莓派、单片机）
+- 底层系统编程（内存分配器、编译器、链接器，与 AI 工作负载无明显关联时）
+- 通用开发工具（命名规范、代码风格、纯前端模板、UI 组件库、管理后台模板、静态网站主题）
+- 学习资源（纯教程仓库、面试题合集、Roadmap，除非是含实用代码的深度技术指南）
+- 配置文件集合（Dotfiles、配置模板）
+- 与 AI / 科技无关的内容（电子书、资源搬运、刷榜项目、明星项目搬运）
+- 纯娱乐 / 高风险误用（deepfake 等无明确基础设施价值的项目）
+
+### 6.3 Prompt 文件
 
 #### prompts/section_github.md（骨架）
 
 - 角色定位（"开源情报分析师"）
 - 输入 schema 说明（JSON 数组：url / full_name / description / language / stars_today / stars_total / topics / license / pushed_at / readme_excerpt）
+- 关注领域：引用 §6.2（正面列表与负面排除完整复制进 prompt）
 - 选项规则：
-  - 从候选中挑 1-`max_items` 个最值得关注的 AI 相关项目
-  - 优先：stars_today 高 + topics 含 AI 标签 + readme 描述明确 + 非纯模板/教程仓库
-  - 跳过：归档项目、纯 awesome-list、个人配置 dotfiles
+  - 从候选中挑 1-`max_items` 个最值得关注的项目
+  - 优先信号：stars_today 高 + topics 含 AI 标签（agent/llm/rag/inference/training 等）+ readme 描述明确 + 非纯模板/教程仓库
+  - 必跳过：`archived=true`（理论上已在 enricher 剔除，prompt 层兜底）、纯 awesome-list、个人配置 dotfiles
 - 输出格式（markdown 列表）：
   - `- **owner/repo** ⭐{stars_today} — 一句话价值定位 [link]`
-- 风格约束：与 digest 同源，避免套话
+  - 一句话需点明"解决什么问题"，避免营销语
+- 风格约束：与 `prompts/digest.md` 同源；负面句式（"震撼""炸裂""革命性"）禁用；避免套话
 
 #### prompts/section_hackernews_select.md（骨架）
 
 - 角色定位（"HN 早间选题人"）
-- 输入：JSON 数组（30 条 frontpage 元数据）
-- 任务：挑 `k` 个最可能与 AI / ML / LLM / dev tools 相关的 story id
-- 输出：纯 JSON id 数组，如 `["12345", "67890"]`
+- 输入：JSON 数组（30 条 frontpage 元数据：id / title / site / points / comments）
+- 关注领域：引用 §6.2
+- 任务：挑 `k` 个最符合关注领域的 story id（K 默认 1）
+- 决策原则：title + site 不足以判定 AI 相关时，**宁可漏选不可错选**（错选会让最终 LLM 写出与 AI Daily 调性无关的内容）
+- 输出：纯 JSON id 数组，如 `["12345"]` 或 `[]`（无任何匹配时返回空数组）
+- 严禁输出任何解释性文字
 
 #### prompts/section_hackernews.md（骨架）
 
 - 角色定位（"HN 早间编辑"）
-- 输入 schema 说明（含 link_content 与 top_comments）
-- 任务：对输入的 `K` 个 enriched stories 全部行文（不再二次挑选；K 由 `select_k` 决定，默认 1）
+- 输入 schema 说明（K 个 enriched story，含 `link_content` 与 `top_comments`）
+- 关注领域：引用 §6.2（K=1 时通常无需筛选，仅作为行文背景参考）
+- 任务：对输入的 `K` 个 enriched stories 全部行文（不再二次挑选）
+- 内容要求（每条 story）：
+  - 提炼原文核心（背景 / 要点 / 结论）
+  - 汇总 HN 评论区的有价值观点（支持 / 反对 / 补充），不是简单复述
+  - 若评论中出现明显反驳原文的观点，必须保留并标注
 - 输出格式建议（最终以 prompt 实测为准）：
-  - `### 标题 (N pts · M comments)`
-  - `- 链接: url`
-  - `- 要点: 从正文 + 评论提炼 2-3 条 bullet`
-  - `- HN 讨论: comments_url`
+  ```
+  ### 标题 (N pts · M comments)
+  - 链接: url
+  - 内容总结: 2-3 条核心要点
+  - 💬 HN 讨论: 1-2 条最有价值的观点（含反对意见）
+  - 🔗 HN 讨论页: comments_url
+  ```
+- 风格约束：客观、犀利、克制；避免与 RSS digest 句式雷同；不做宏大叙事
 
 #### prompts/insights.md（骨架）
 
@@ -455,7 +492,7 @@ async def generate_trend_insights(
 - 风格约束：避免与 RSS digest 句式雷同；避免简单复述已经在其他板块出现过的具体新闻
 - 结构与 bullet 数量交由 prompt 内部约定，code 层不限制
 
-### 6.3 调用顺序与并发
+### 6.4 调用顺序与并发
 
 ```python
 async def _run_morning_push(config):
@@ -663,6 +700,7 @@ def is_morning_push(now: datetime, config: Dict) -> bool:
 | 无历史上下文 | GH / HN 板块均不传 recent_section_titles | 用户决策：避免不必要的上下文污染；GH/HN 风格与 RSS digest 差异已足够大 |
 | insights 历史窗口 | 复用 `filter.push_context_days` | 不引入新字段；insights 段需要历史防风格趋同 |
 | insights 输出结构 | 由 prompt 决定，code 不强加 | 用户决策：bullet 数量与栏目属于 prompt 工程，便于迭代 |
+| GH / HN 关注领域沉淀 | 在 §6.2 集中定义正面列表 + 负面排除，3 个 prompt 引用 | 避免领域定义在 prompt 间漂移；用户已明确兴趣边界（AI Agent / 模型 / 基础设施 / 大厂动态），排除嵌入式、底层系统、纯前端模板、学习资源等 |
 | 板块 sentinel 用 HTML 注释 | `<!-- SECTION:xxx BEGIN/END -->` | markdown 渲染不显示；机器易解析；老 push 文件零冲突 |
 | 失败降级粒度 | 单板块失败省略本段；RSS 失败整体退出 | RSS 是核心承诺，其他是增强 |
 | 早报判定 | cron + 容差，而非"今天第一次" | 早报失败时晚报不会错误升级为长版本 |
