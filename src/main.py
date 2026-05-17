@@ -96,6 +96,24 @@ def calculate_push_times(
     return sorted(times)
 
 
+def is_morning_push(now: datetime, config: Dict) -> bool:
+    """判定当前时刻是否为早报触发点。
+
+    用 cron + 容差判定,而非"今天的第一次推送":
+    - 早报失败时,晚报不会错误升级为长版本
+    - 容差直接绑定 cron 表达式,配置直观
+    """
+    morning_cron = config.get("schedule", {}).get("morning_cron")
+    if not morning_cron:
+        return False
+    tolerance = timedelta(
+        minutes=config["schedule"].get("morning_match_tolerance_minutes", 5)
+    )
+    base = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_fire = croniter(morning_cron, base).get_next(datetime)
+    return abs(now - today_fire) <= tolerance
+
+
 def collect_entries_for_push(
     last_push_time: Optional[datetime],
     context_days: int = 2,
