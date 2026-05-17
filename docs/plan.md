@@ -47,7 +47,7 @@
 
 - ✅ 设计完成,详见 `docs/extra-sections-design.md`
 - ✅ 实施计划完成,详见 `docs/superpowers/plans/2026-05-17-extra-sections.md`
-- 🔄 实施中(按计划分 28 个任务推进)
+- ✅ 实施完成(28 个任务全部落地;199 单测通过 + 真实 API 烟测 GH/HN 通过;feat/extra-sections 分支待 review/merge)
 
 **2026-05-15**
 - 优化提示词，修复长时运行下的新闻报告措辞趋同问题
