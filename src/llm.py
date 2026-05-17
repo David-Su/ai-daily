@@ -397,3 +397,109 @@ async def compose_digest(
         return await call_llm(prompt, config)
     except Exception:
         raise
+
+
+async def summarize_github_trending(
+    enriched_repos: List[Dict], config: Dict
+) -> Tuple[str, Optional[str]]:
+    """GH 板块总结:从 enriched 候选中选 1-max_items + 写 markdown。不传历史上下文。"""
+    prompt_path = config.get("prompts", {}).get(
+        "section_github", "prompts/section_github.md"
+    )
+    max_items = (
+        config.get("sections", {}).get("github_trending", {}).get("max_items", 3)
+    )
+    prompt = load_prompt(
+        prompt_path,
+        repos_json=json.dumps(enriched_repos, ensure_ascii=False, indent=2),
+        max_items=max_items,
+    )
+    try:
+        return await call_llm(prompt, config), None
+    except Exception as e:
+        msg = f"summarize_github_trending 失败: {e}"
+        print(f"⚠️ {msg}")
+        return "", msg
+
+
+async def select_ai_related_hn(
+    candidates: List[Dict], k: int, config: Dict
+) -> Tuple[List[str], Optional[str]]:
+    """轻 LLM:从 HN 首页候选元数据中挑 k 个 AI 相关 id。
+
+    输入候选只含 id/title/site/points/comments 字段(不含正文)。
+    """
+    prompt_path = config.get("prompts", {}).get(
+        "section_hackernews_select", "prompts/section_hackernews_select.md"
+    )
+    slim = [
+        {
+            "id": c.get("id"),
+            "title": c.get("title", ""),
+            "site": c.get("site", ""),
+            "points": c.get("points", 0),
+            "comments": c.get("comments", 0),
+        }
+        for c in candidates
+    ]
+    prompt = load_prompt(
+        prompt_path,
+        k=k,
+        candidates_json=json.dumps(slim, ensure_ascii=False, indent=2),
+    )
+    try:
+        response = await call_llm(prompt, config)
+    except Exception as e:
+        msg = f"select_ai_related_hn 失败: {e}"
+        print(f"⚠️ {msg}")
+        return [], msg
+
+    try:
+        ids = _parse_llm_json_response(response)
+    except ValueError as e:
+        msg = f"select_ai_related_hn 解析失败: {e}"
+        print(f"⚠️ {msg}")
+        return [], msg
+
+    if not isinstance(ids, list):
+        return [], "select_ai_related_hn 返回非数组"
+    return [str(x) for x in ids][:k], None
+
+
+async def summarize_hackernews(
+    enriched_stories: List[Dict], config: Dict
+) -> Tuple[str, Optional[str]]:
+    """对输入的 K 个 enriched stories 行文(K 由 select_k 决定)。不传历史上下文。"""
+    prompt_path = config.get("prompts", {}).get(
+        "section_hackernews", "prompts/section_hackernews.md"
+    )
+    prompt = load_prompt(
+        prompt_path,
+        stories_json=json.dumps(enriched_stories, ensure_ascii=False, indent=2),
+    )
+    try:
+        return await call_llm(prompt, config), None
+    except Exception as e:
+        msg = f"summarize_hackernews 失败: {e}"
+        print(f"⚠️ {msg}")
+        return "", msg
+
+
+async def generate_trend_insights(
+    sections: Dict[str, str], recent_insights: str, config: Dict
+) -> Tuple[str, Optional[str]]:
+    """输入三段成品 + 近期 insights 标题清单,返回洞察段 markdown。"""
+    prompt_path = config.get("prompts", {}).get("insights", "prompts/insights.md")
+    prompt = load_prompt(
+        prompt_path,
+        rss=sections.get("rss", ""),
+        github=sections.get("github", ""),
+        hackernews=sections.get("hackernews", ""),
+        recent_insights=recent_insights or "",
+    )
+    try:
+        return await call_llm(prompt, config), None
+    except Exception as e:
+        msg = f"generate_trend_insights 失败: {e}"
+        print(f"⚠️ {msg}")
+        return "", msg
