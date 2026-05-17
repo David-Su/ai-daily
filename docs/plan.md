@@ -48,6 +48,12 @@
 - ✅ 设计完成,详见 `docs/extra-sections-design.md`
 - ✅ 实施计划完成,详见 `docs/superpowers/plans/2026-05-17-extra-sections.md`
 - ✅ 实施完成(28 个任务全部落地;199 单测通过 + 真实 API 烟测 GH/HN 通过;feat/extra-sections 分支待 review/merge)
+- ✅ 合入 main(merge commit `1b2ca68`,--no-ff)
+- ✅ 合入后优化:
+  - 加 GH/HN section 关键步骤日志(每步条数 + 成功/失败计数)
+  - 加 `python -m src.main github` / `hackernews` CLI 子命令(单跑板块,不推送)
+  - 基于真实数据校准截断默认值:`readme_max_chars 3000→5000`、`comment_max_chars 500→800`、`link_content_max_chars 3000→6000`(详见 extra-sections-design.md §14)
+  - CLAUDE.md 文档索引补 `docs/extra-sections-design.md` 入口
 
 **2026-05-15**
 - 优化提示词，修复长时运行下的新闻报告措辞趋同问题

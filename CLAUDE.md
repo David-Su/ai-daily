@@ -24,3 +24,5 @@ AI 驱动的 RSS 新闻聚合与推送系统，支持 400+ 信息源，使用 LL
 
 - 技术架构 → [docs/tech-spec.md](docs/tech-spec.md)
 - 开发计划 → [docs/plan.md](docs/plan.md)
+- 早报扩展板块设计（GitHub / HN / 洞察）→ [docs/extra-sections-design.md](docs/extra-sections-design.md)
+- 实施计划归档 → [docs/superpowers/plans/](docs/superpowers/plans/)

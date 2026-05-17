@@ -28,6 +28,7 @@ CLI 子命令分工（详见 `python -m src.main --help`）：
 - `check`：**唯一**的 LLM 健康检查入口，仅在部署期由 `install.sh` 调用
 - `fetch` / `push`：单次执行后退出，由 systemd timer 触发；运行期不再做 LLM 健康检查，异常由统一的告警通道兜底
 - `loop`：开发模式，启动时做一次健康检查，然后并发跑 fetch/push 循环
+- `github` / `hackernews`：单板块手动调试入口；只跑对应板块（含 LLM 总结），打印 markdown 到终端，**不**推送、**不**写入 push 文件。仅供 prompt 调优期使用
 
 关键约束：`fetch` / `push` 失败时进程退出码非 0，systemd 据此判定 service 失败，下个 timer 周期自动重试。
 
