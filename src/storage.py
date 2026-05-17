@@ -481,3 +481,45 @@ def cleanup_old_files(days: int = 7, data_dir: str = "news-data"):
 
     if deleted_count > 0:
         print(f"   ✅ 清理完成: 删除了 {deleted_count} 个旧文件")
+
+
+def load_recent_section_titles(
+    section: str, days: int, data_dir: str = "news-data"
+) -> str:
+    """加载最近 days 天 push 文件中 section 段的标题清单(供 LLM 查重防风格趋同)。
+
+    返回紧凑纯文本,每行一条事件;遇到老文件(无 sentinel)按 extract_section 的兜底语义处理。
+    """
+    data_path = Path(data_dir)
+    if not data_path.exists():
+        return ""
+
+    tz = get_timezone()
+    today = datetime.now(tz).date()
+
+    items: List[tuple] = []
+    loaded_files: List[str] = []
+    for i in range(days):
+        d = today - timedelta(days=i)
+        pattern = f"push-{d.isoformat()}-*.md"
+        for push_file in sorted(data_path.glob(pattern)):
+            if push_file.stat().st_size == 0:
+                continue
+            try:
+                with open(push_file, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except Exception:
+                continue
+            section_md = extract_section(content, section)
+            if not section_md:
+                continue
+            items.extend(_extract_push_titles(section_md))
+            loaded_files.append(push_file.name)
+
+    if loaded_files:
+        print(
+            f"   📂 已加载 {len(loaded_files)} 个 push 文件 (section={section}): "
+            f"{', '.join(loaded_files)}"
+        )
+
+    return "\n".join(f"- [{t}] {title}" if t else f"- {title}" for t, title in items)
