@@ -483,3 +483,23 @@ async def summarize_hackernews(
         msg = f"summarize_hackernews 失败: {e}"
         print(f"⚠️ {msg}")
         return "", msg
+
+
+async def generate_trend_insights(
+    sections: Dict[str, str], recent_insights: str, config: Dict
+) -> Tuple[str, Optional[str]]:
+    """输入三段成品 + 近期 insights 标题清单,返回洞察段 markdown。"""
+    prompt_path = config.get("prompts", {}).get("insights", "prompts/insights.md")
+    prompt = load_prompt(
+        prompt_path,
+        rss=sections.get("rss", ""),
+        github=sections.get("github", ""),
+        hackernews=sections.get("hackernews", ""),
+        recent_insights=recent_insights or "",
+    )
+    try:
+        return await call_llm(prompt, config), None
+    except Exception as e:
+        msg = f"generate_trend_insights 失败: {e}"
+        print(f"⚠️ {msg}")
+        return "", msg
