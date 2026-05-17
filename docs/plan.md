@@ -52,7 +52,10 @@
 - ✅ 合入后优化:
   - 加 GH/HN section 关键步骤日志(每步条数 + 成功/失败计数)
   - 加 `python -m src.main github` / `hackernews` CLI 子命令(单跑板块,不推送)
-  - 基于真实数据校准截断默认值:`readme_max_chars 3000→5000`、`comment_max_chars 500→800`、`link_content_max_chars 3000→6000`(详见 extra-sections-design.md §14)
+  - 基于真实数据校准截断默认值（保守 → 激进两轮）:
+    - 第一轮:`readme_max_chars 3000→5000`、`comment_max_chars 500→800`、`link_content_max_chars 3000→6000`(仍在 64k budget)
+    - 第二轮:`readme_max_chars→10000`、`top_comments 20→50`、`link_content_max_chars→50000`,同步把 `llm.max_prompt_chars 64000→150000` 充分利用 DeepSeek v4 flash 128k tokens 上下文(详见 extra-sections-design.md §14)
+  - 接入 Jina Reader 拉外链 markdown,失败回退到 html_to_markdown
   - CLAUDE.md 文档索引补 `docs/extra-sections-design.md` 入口
 
 **2026-05-15**

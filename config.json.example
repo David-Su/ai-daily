@@ -23,7 +23,7 @@
             "enabled": true,
             "max_items": 3,
             "max_deep_dive": 10,
-            "readme_max_chars": 5000,
+            "readme_max_chars": 10000,
             "history_file": "news-data/trending-history.json",
             "request_timeout": 10,
             "tokenName": "GITHUB_TOKEN"
@@ -31,9 +31,9 @@
         "hackernews": {
             "enabled": true,
             "select_k": 1,
-            "top_comments": 20,
+            "top_comments": 50,
             "comment_max_chars": 800,
-            "link_content_max_chars": 6000,
+            "link_content_max_chars": 50000,
             "request_timeout": 10,
             "algolia_base": "https://hn.algolia.com/api/v1"
         },
@@ -50,7 +50,7 @@
         "model": "deepseek-v4-flash",
         "baseUrl": "https://api.deepseek.com",
         "apiKeyName": "DEEPSEEK_API_KEY",
-        "max_prompt_chars": 64000,
+        "max_prompt_chars": 150000,
         "max_concurrent_batches": 3,
         "prompts": {
             "score_batch": "prompts/score_batch.md",
