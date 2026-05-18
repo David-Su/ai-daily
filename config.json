@@ -27,6 +27,7 @@
         "max_retries": 3,
         "prompts": {
             "score_batch": "prompts/score_batch.md",
+            "score_batch_investment": "prompts/score_batch_investment.md",
             "immediate_push": "prompts/immediate_push.md",
             "digest": "prompts/digest.md"
         }

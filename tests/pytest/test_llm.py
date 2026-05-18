@@ -158,7 +158,23 @@ class TestMergeScores:
 
         assert result[0]["score"] == 85
         assert result[0]["tags"] == ["AI"]
+        assert result[0]["domain"] == ""
         assert result[1]["score"] == 70
+
+    def test_merge_scores_preserves_domain(self):
+        entries = [{"link": "https://example.com/1", "title": "Title1"}]
+        scores = [
+            {
+                "link": "https://example.com/1",
+                "score": 85,
+                "tags": ["AI"],
+                "domain": "AI",
+                "summary": "Summary1",
+            }
+        ]
+        result = _merge_scores(entries, scores)
+
+        assert result[0]["domain"] == "AI"
 
     def test_merge_scores_partial(self):
         entries = [

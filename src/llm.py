@@ -332,6 +332,7 @@ def _merge_scores(entries: List[Dict], scores: List[Dict]) -> List[Dict]:
             {
                 **entry,
                 "tags": score_data.get("tags", entry.get("tags", [])),
+                "domain": score_data.get("domain", entry.get("domain", "")),
                 "score": score_value,
                 "summary": score_data.get("summary", entry.get("summary", "")),
             }
