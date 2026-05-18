@@ -108,17 +108,16 @@ async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:
 def _build_batch_prompt(entries: List[Dict], prompt_path: str = None) -> str:
     """构建批量评分prompt"""
     # 构建entries JSON列表（只包含必要字段）
-    entries_for_llm = []
-    for e in entries:
-        entries_for_llm.append(
-            {
-                "link": e.get("link", ""),
-                "title": e.get("title", "无标题"),
-                "source": e.get("source", "未知来源"),
-                "published": e.get("published", ""),
-                "content": e.get("content", "")[:2000],  # 限制内容长度
-            }
-        )
+    entries_for_llm = [
+        {
+            "link": e.get("link", ""),
+            "title": e.get("title", "无标题"),
+            "source": e.get("source", "未知来源"),
+            "published": e.get("published", ""),
+            "content": e.get("content", "")[:2000],  # 限制内容长度
+        }
+        for e in entries
+    ]
 
     entries_json = json.dumps(entries_for_llm, ensure_ascii=False, indent=2)
 
