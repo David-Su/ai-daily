@@ -61,7 +61,32 @@
                 "title": "Chrome for Developers",
                 "xmlUrl": "https://developer.chrome.com/static/blog/feed.xml",
                 "category": "Chrome"
-            }
+            },
+            {
+                "title": "A VC",
+                "xmlUrl": "https://feeds.feedblitz.com/avcfeed",
+                "category": "Investing"
+            },
+            {
+                "title": "Paul Graham Essays",
+                "xmlUrl": "https://www.aaronsw.com/2002/feeds/pgessays.rss",
+                "category": "Investing"
+            },
+            {
+                "title": "CNBC",
+                "xmlUrl": "https://www.cnbc.com/?format=rss",
+                "category": "Markets"
+            },
+            {
+                "title": "财富中文网",
+                "xmlUrl": "https://plink.anyfeeder.com/fortunechina/shangye",
+                "category": "Startups"
+            },
+          {
+            "title": "商界新闻",
+            "xmlUrl": "https://plink.anyfeeder.com/jiemian/business",
+            "category": "Startups"
+          }
         ],
         "block": [
             {
