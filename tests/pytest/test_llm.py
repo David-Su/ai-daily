@@ -299,6 +299,50 @@ class TestScoreBatch:
         assert errors == ["批次1 评分失败: boom"]
 
     @pytest.mark.asyncio
+    async def test_score_single_batch_fills_score_standard(
+        self, sample_entries, temp_dir
+    ):
+        prompt_file = temp_dir / "score_batch.md"
+        prompt_file.write_text(
+            "{entries_json}\n\n{score_standard}",
+            encoding="utf-8",
+        )
+        standard_file = temp_dir / "AI.md"
+        standard_file.write_text("AI score rules", encoding="utf-8")
+        entries = sample_entries[:1]
+        llm_results = [
+            {
+                "link": entries[0]["link"],
+                "score": 90,
+                "tags": ["AI"],
+                "summary": "Matched result",
+            }
+        ]
+        config = {
+            "prompts": {
+                "score_batch": str(prompt_file),
+                "domain": {
+                    "activity_domains": ["AI"],
+                    "domains": [
+                        {
+                            "key": "AI",
+                            "score_standard": str(standard_file),
+                        }
+                    ],
+                },
+            }
+        }
+
+        with patch("llm.call_llm", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = json.dumps(llm_results, ensure_ascii=False)
+            results, errors = await _score_single_batch(entries, config)
+
+        prompt = mock_call.await_args.args[0]
+        assert "### AI\nAI score rules" in prompt
+        assert len(results) == 1
+        assert errors == []
+
+    @pytest.mark.asyncio
     async def test_score_single_batch_reconcile_partial_results(
         self, sample_entries, sample_config
     ):

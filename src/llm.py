@@ -105,7 +105,9 @@ async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:
     return response_text
 
 
-def _build_batch_prompt(entries: List[Dict], prompt_path: str = None) -> str:
+def _build_batch_prompt(
+    entries: List[Dict], prompt_path: str = None, score_standard: str = ""
+) -> str:
     """构建批量评分prompt"""
     # 构建entries JSON列表（只包含必要字段）
     entries_for_llm = [
@@ -125,7 +127,29 @@ def _build_batch_prompt(entries: List[Dict], prompt_path: str = None) -> str:
     if prompt_path is None:
         prompt_path = "prompts/score_batch.md"
 
-    return load_prompt(prompt_path, entries_json=entries_json)
+    return load_prompt(
+        prompt_path,
+        entries_json=entries_json,
+        score_standard=score_standard,
+    )
+
+
+def _build_score_standard(config: Dict) -> str:
+    """Build enabled domain score standards from prompt files."""
+    domain_config = config.get("prompts", {}).get("domain", {})
+    active_domains = set(domain_config.get("activity_domains", []))
+    standards = []
+
+    for domain in domain_config.get("domains", []):
+        key = domain.get("key", "")
+        score_standard_path = domain.get("score_standard", "")
+        if not key or key not in active_domains or not score_standard_path:
+            continue
+
+        standard_content = load_prompt(score_standard_path).strip()
+        standards.append(f"### {key}\n{standard_content}")
+
+    return "\n".join(standards)
 
 
 def _parse_llm_json_response(response: str) -> List[Dict]:
@@ -243,7 +267,8 @@ async def _score_single_batch(
     """对单批entries进行评分"""
     # 从config获取批量评分提示词路径
     prompt_path = config.get("prompts", {}).get("score_batch", "prompts/score_batch.md")
-    prompt = _build_batch_prompt(entries, prompt_path)
+    score_standard = _build_score_standard(config)
+    prompt = _build_batch_prompt(entries, prompt_path, score_standard=score_standard)
 
     try:
         response = await call_llm(prompt, config)

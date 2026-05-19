@@ -1,107 +1,128 @@
 {
-    "filter": {
-        "min_score": 60,
-        "hot_threshold": 90,
-        "context_days": 2,
-        "keep_days": 7,
-        "push_context_days": 5,
-        "no_content_marker": "[NO_NEW_CONTENT]"
-    },
-    "schedule": {
-        "fetch_interval_minutes": 30,
-        "fetch_lookback_minutes": 120,
-        "push_cron": ["0 8 * * *", "0 17 * * *"],
-        "timezone_hours": 8
-    },
-    "fetch": {
-        "max_workers": 10,
-        "timeout": 10
-    },
-    "llm": {
-        "provider": "openai",
-        "model": "gpt-5.5",
-        "baseUrl": "http://170.106.159.162:3036/v1",
-        "apiKeyName": "OPENAI_API_KEY",
-        "max_prompt_chars": 20000,
-        "max_concurrent_batches": 2,
-        "max_retries": 3,
-        "prompts": {
-            "score_batch": "prompts/score_batch.md",
-            "score_batch_investment": "prompts/score_batch_investment.md",
-            "immediate_push": "prompts/immediate_push.md",
-            "digest": "prompts/digest.md"
-        }
-    },
-    "push": {
-        "discord": {
-            "enabled": false,
-            "apiKeyName": "DISCORD_WEBHOOK_URL"
-        },
-        "feishu": {
-            "enabled": false,
-            "apiKeyName": "FEISHU_WEBHOOK_URL"
-        },
-        "gmail": {
-            "enabled": true,
-            "usernameKeyName": "GMAIL_USERNAME",
-            "passwordKeyName": "GMAIL_APP_PASSWORD",
-            "toKeyName": "GMAIL_TO",
-            "fromName": "AI Daily"
-        }
-    },
-    "sources": {
-        "base_opml": "resources/rss.opml",
-        "add": [
-            {
-                "title": "OpenAI News",
-                "xmlUrl": "https://openai.com/news/rss.xml",
-                "category": "AI"
-            },
-            {
-                "title": "Chrome for Developers",
-                "xmlUrl": "https://developer.chrome.com/static/blog/feed.xml",
-                "category": "Chrome"
-            },
-            {
-                "title": "A VC",
-                "xmlUrl": "https://feeds.feedblitz.com/avcfeed",
-                "category": "Investing"
-            },
-            {
-                "title": "Paul Graham Essays",
-                "xmlUrl": "https://www.aaronsw.com/2002/feeds/pgessays.rss",
-                "category": "Investing"
-            },
-            {
-                "title": "CNBC",
-                "xmlUrl": "https://www.cnbc.com/?format=rss",
-                "category": "Markets"
-            },
-            {
-                "title": "财富中文网",
-                "xmlUrl": "https://plink.anyfeeder.com/fortunechina/shangye",
-                "category": "Startups"
-            },
+  "filter": {
+    "min_score": 60,
+    "hot_threshold": 90,
+    "context_days": 2,
+    "keep_days": 7,
+    "push_context_days": 5,
+    "no_content_marker": "[NO_NEW_CONTENT]"
+  },
+  "schedule": {
+    "fetch_interval_minutes": 30,
+    "fetch_lookback_minutes": 120,
+    "push_cron": [
+      "0 8 * * *",
+      "0 17 * * *"
+    ],
+    "timezone_hours": 8
+  },
+  "fetch": {
+    "max_workers": 10,
+    "timeout": 10
+  },
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-5.5",
+    "baseUrl": "http://170.106.159.162:3036/v1",
+    "apiKeyName": "OPENAI_API_KEY",
+    "max_prompt_chars": 20000,
+    "max_concurrent_batches": 2,
+    "max_retries": 3,
+    "prompts": {
+      "domain": {
+        "activity_domains": [
+          "AI",
+          "投资"
+        ],
+        "domains": [
           {
-            "title": "商界新闻",
-            "xmlUrl": "https://plink.anyfeeder.com/jiemian/business",
-            "category": "Startups"
+            "key": "AI",
+            "score_standard": "prompts/domains/AI.md"
+          },
+          {
+            "key": "投资",
+            "score_standard": "prompts/domains/investment.md"
           }
-        ],
-        "block": [
-            {
-                "title": "Google Developers Blog",
-                "xmlUrl": "https://developers.googleblog.com/feeds/posts/default"
-            },
-            {
-                "title": "Microsoft for Developers",
-                "xmlUrl": "https://devblogs.microsoft.com/landing"
-            },
-            {
-                "title": "ElevenLabs Blog",
-                "xmlUrl": "https://api.bestblogs.dev/feed/elevenLabsBlog"
-            }
-        ],
-        "block_domains": ["*.substack.com", "*.youtube.com"]
+        ]
+      },
+      "score_batch": "prompts/score_batch.md",
+      "immediate_push": "prompts/immediate_push.md",
+      "digest": "prompts/digest.md"
     }
+  },
+  "push": {
+    "discord": {
+      "enabled": false,
+      "apiKeyName": "DISCORD_WEBHOOK_URL"
+    },
+    "feishu": {
+      "enabled": false,
+      "apiKeyName": "FEISHU_WEBHOOK_URL"
+    },
+    "gmail": {
+      "enabled": true,
+      "usernameKeyName": "GMAIL_USERNAME",
+      "passwordKeyName": "GMAIL_APP_PASSWORD",
+      "toKeyName": "GMAIL_TO",
+      "fromName": "AI Daily"
+    }
+  },
+  "sources": {
+    "base_opml": "resources/rss.opml",
+    "add": [
+      {
+        "title": "OpenAI News",
+        "xmlUrl": "https://openai.com/news/rss.xml",
+        "category": "AI"
+      },
+      {
+        "title": "Chrome for Developers",
+        "xmlUrl": "https://developer.chrome.com/static/blog/feed.xml",
+        "category": "Chrome"
+      },
+      {
+        "title": "A VC",
+        "xmlUrl": "https://feeds.feedblitz.com/avcfeed",
+        "category": "Investing"
+      },
+      {
+        "title": "Paul Graham Essays",
+        "xmlUrl": "https://www.aaronsw.com/2002/feeds/pgessays.rss",
+        "category": "Investing"
+      },
+      {
+        "title": "CNBC",
+        "xmlUrl": "https://www.cnbc.com/?format=rss",
+        "category": "Markets"
+      },
+      {
+        "title": "财富中文网",
+        "xmlUrl": "https://plink.anyfeeder.com/fortunechina/shangye",
+        "category": "Startups"
+      },
+      {
+        "title": "商界新闻",
+        "xmlUrl": "https://plink.anyfeeder.com/jiemian/business",
+        "category": "Startups"
+      }
+    ],
+    "block": [
+      {
+        "title": "Google Developers Blog",
+        "xmlUrl": "https://developers.googleblog.com/feeds/posts/default"
+      },
+      {
+        "title": "Microsoft for Developers",
+        "xmlUrl": "https://devblogs.microsoft.com/landing"
+      },
+      {
+        "title": "ElevenLabs Blog",
+        "xmlUrl": "https://api.bestblogs.dev/feed/elevenLabsBlog"
+      }
+    ],
+    "block_domains": [
+      "*.substack.com",
+      "*.youtube.com"
+    ]
+  }
 }
