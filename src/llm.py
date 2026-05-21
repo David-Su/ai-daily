@@ -106,9 +106,14 @@ async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:
 
 
 def _build_batch_prompt(
-    entries: List[Dict], prompt_path: str = None, score_standard: str = ""
+        config: Dict,
+        entries: List[Dict],
 ) -> str:
     """构建批量评分prompt"""
+
+    # 构建评分标准
+    score_standard = _build_score_standard(config)
+
     # 构建entries JSON列表（只包含必要字段）
     entries_for_llm = [
         {
@@ -120,10 +125,10 @@ def _build_batch_prompt(
         }
         for e in entries
     ]
-
     entries_json = json.dumps(entries_for_llm, ensure_ascii=False, indent=2)
 
     # 从文件加载提示词模板，如果未指定则使用默认路径
+    prompt_path = config.get("prompts", {}).get("score_batch", "prompts/score_batch.md")
     if prompt_path is None:
         prompt_path = "prompts/score_batch.md"
 
@@ -188,7 +193,9 @@ def _parse_llm_json_response(response: str) -> List[Dict]:
 
 
 def _split_entries_for_batch(
-    entries: List[Dict], max_prompt_chars: int = 10000
+        entries: List[Dict],
+        max_prompt_chars: int = 10000,
+        prompt_chars: int = 100
 ) -> List[List[Dict]]:
     """将entries分成多个批次，每批不超过max_prompt_chars字符"""
     if not entries:
@@ -199,7 +206,7 @@ def _split_entries_for_batch(
     current_chars = 0
 
     # 预留prompt模板和JSON包装的空间
-    overhead = len(_build_batch_prompt([])) + 500
+    overhead = prompt_chars + 500
 
     for entry in entries:
         # 估算该entry在JSON中的字符数
@@ -266,9 +273,8 @@ async def _score_single_batch(
 ) -> Tuple[List[Dict], List[str]]:
     """对单批entries进行评分"""
     # 从config获取批量评分提示词路径
-    prompt_path = config.get("prompts", {}).get("score_batch", "prompts/score_batch.md")
-    score_standard = _build_score_standard(config)
-    prompt = _build_batch_prompt(entries, prompt_path, score_standard=score_standard)
+
+    prompt = _build_batch_prompt(config, entries)
 
     try:
         response = await call_llm(prompt, config)
@@ -301,9 +307,9 @@ async def score_batch(
     # 获取分批配置
     max_prompt_chars = config.get("max_prompt_chars", 10000)
     max_concurrent_batches = config.get("max_concurrent_batches", 3)
-
     # 分批
-    batches = _split_entries_for_batch(entries, max_prompt_chars)
+    prompt_chars = len(_build_batch_prompt(config, []))
+    batches = _split_entries_for_batch(entries, max_prompt_chars, prompt_chars)
     print(f"📦 分成 {len(batches)} 个批次评分 (共 {len(entries)} 条)")
 
     # 如果只有一批，直接处理
