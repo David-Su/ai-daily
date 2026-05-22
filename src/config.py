@@ -32,12 +32,6 @@ def get_timezone(config: Dict = None) -> timezone:
     return timezone(timedelta(hours=hours))
 
 
-# 向后兼容的别名
-def get_cst(config: Dict = None) -> timezone:
-    """向后兼容，使用 get_timezone"""
-    return get_timezone(config)
-
-
 def load_config(config_path: str = "config.json") -> Dict:
     """加载配置文件"""
     path = Path(config_path)

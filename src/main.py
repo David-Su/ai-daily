@@ -41,6 +41,8 @@ from src.storage import (
     save_push_file,
 )
 
+DEFAULT_PUSH_DOMAIN = "未分类"
+
 
 async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
     """发送简单的 LLM 异常通知"""
@@ -76,6 +78,38 @@ def parse_time_to_local(time_str: str, config: Dict = None) -> Optional[datetime
         return None
 
 
+def normalize_entry_domain(entry: Dict) -> str:
+    """读取 entry 的 domain，缺失时归到未分类。"""
+    domain = str(entry.get("domain") or "").strip()
+    return domain or DEFAULT_PUSH_DOMAIN
+
+
+def get_domain_order(config: Dict) -> List[str]:
+    """从配置读取 domain 顺序，用于稳定推送顺序。"""
+    domain_config = (
+        config.get("llm", {}).get("prompts", {}).get("domain", {})
+        if config
+        else {}
+    )
+    active_domains = domain_config.get("activity_domains", [])
+    configured_domains = [
+        item.get("key") for item in domain_config.get("domains", []) if item.get("key")
+    ]
+
+    order = []
+    for domain in active_domains + configured_domains + [DEFAULT_PUSH_DOMAIN]:
+        if domain and domain not in order:
+            order.append(domain)
+    return order
+
+
+def sort_domains(domains: List[str], config: Dict) -> List[str]:
+    """按配置顺序排列 domain，其余 domain 放在最后。"""
+    order = get_domain_order(config)
+    order_index = {domain: index for index, domain in enumerate(order)}
+    return sorted(domains, key=lambda d: (order_index.get(d, len(order_index)), d))
+
+
 def calculate_push_times(
     cron_list: List[str], offset_days: int = 0, config: Dict = None
 ) -> List[datetime]:
@@ -95,66 +129,62 @@ def calculate_push_times(
     return sorted(times)
 
 
-def collect_entries_for_push(
-    last_push_time: Optional[datetime],
+def collect_entries_for_domain_pushes(
     context_days: int = 2,
     min_score: int = 60,
     data_dir: str = "news-data",
-) -> tuple[List[Dict], List[Dict]]:
-    """
-    收集推送所需的条目，返回 (待推送条目, 上下文条目)
-
-    逻辑：
-    1. 获取 context_days 天内的所有条目
-    2. 按 min_score 过滤
-    3. push_time = max(last_push_time, now - 24h)
-    4. 晚于 push_time 的 → 待推送条目
-    5. 早于 push_time 的 → 上下文条目（用于LLM去重参考）
-    """
-    tz = get_timezone()
+    config: Dict = None,
+) -> Dict[str, Dict]:
+    """按 domain 收集推送条目，返回每个 domain 独立的待推送与上下文。"""
+    tz = get_timezone(config)
     now = datetime.now(tz)
-
-    # 获取 context_days 天的所有条目
-    all_entries = []
     today = now.date()
+
+    all_entries = []
     for i in range(context_days):
         d = today - timedelta(days=i)
         fetch_file = get_fetch_file(d, data_dir)
-        for entry in read_entries(fetch_file):
-            all_entries.append(entry)
+        all_entries.extend(read_entries(fetch_file))
 
     print(
-        f"📋 收集总条目: {len(all_entries)} 条 , concollect_entries_for_pushtext_days: {context_days}, min_score:{min_score}"
+        f"📋 收集总条目: {len(all_entries)} 条 , context_days: {context_days}, min_score:{min_score}"
     )
 
-    # 按 min_score 过滤
     qualified_entries = [e for e in all_entries if (e.get("score") or 0) >= min_score]
     print(f"📋 过滤后条目: {len(qualified_entries)} 条 ")
 
-    # 计算推送时间边界：max(last_push_time, now - 24h)
-    past_24h = now - timedelta(hours=24)
-    push_cutoff = (
-        last_push_time if last_push_time and last_push_time > past_24h else past_24h
-    )
-
-    print(f"推送时间边界: {push_cutoff.strftime('%Y-%m-%d %H:%M:%S')}")
-
-    # 分割条目
-    to_push = []
-    context = []
-
+    grouped_entries: Dict[str, List[Dict]] = {}
     for entry in qualified_entries:
-        entry_time = parse_time_to_local(entry.get("fetched_at", ""))
-        if entry_time and entry_time > push_cutoff:
-            to_push.append(entry)
-        else:
-            # 上下文条目只保留必要字段
-            context.append(entry)
+        domain = normalize_entry_domain(entry)
+        grouped_entries.setdefault(domain, []).append(entry)
 
-    # 上下文按分数排序，取前50
-    context = sorted(context, key=lambda x: x.get("score", 0), reverse=True)[:50]
+    domain_pushes = {}
+    past_24h = now - timedelta(hours=24)
+    for domain, entries in grouped_entries.items():
+        last_push_file = get_last_push_file(data_dir=data_dir, domain=domain)
+        last_push_time = extract_push_time(last_push_file) if last_push_file else None
+        push_cutoff = (
+            last_push_time if last_push_time and last_push_time > past_24h else past_24h
+        )
 
-    return to_push, context
+        to_push = []
+        context = []
+        for entry in entries:
+            entry_time = parse_time_to_local(entry.get("fetched_at", ""), config)
+            if entry_time and entry_time > push_cutoff:
+                to_push.append(entry)
+            else:
+                context.append(entry)
+
+        context = sorted(context, key=lambda x: x.get("score", 0), reverse=True)[:50]
+        domain_pushes[domain] = {
+            "to_push": to_push,
+            "context": context,
+            "last_push_time": last_push_time,
+            "push_cutoff": push_cutoff,
+        }
+
+    return domain_pushes
 
 
 async def run_fetch_job(config: Dict):
@@ -224,9 +254,6 @@ async def run_fetch_job(config: Dict):
                 entry["published"].astimezone(get_timezone(config)).isoformat()
             )
 
-    # 批量保存到 JSON 文件
-    from datetime import date
-
     meta = {"date": date.today().isoformat()}
     append_entries(fetch_file, scored, meta)
 
@@ -281,55 +308,86 @@ async def run_push_job(config: Dict):
     print(f"📤 Push Job | {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 50}")
 
-    last_push_file = get_last_push_file()
-    last_push_time = extract_push_time(last_push_file) if last_push_file else None
-
-    if last_push_time:
-        print(f"📌 上次推送: {last_push_time.strftime('%Y-%m-%d %H:%M')}")
-
-    # 收集条目：待推送条目 和 上下文条目
     min_score = config["filter"]["min_score"]
     context_days = config["filter"]["context_days"]
 
-    # 已经根据min_score 去除得分较低的数据
-    to_push, context = collect_entries_for_push(
-        last_push_time=last_push_time,
+    domain_pushes = collect_entries_for_domain_pushes(
         context_days=context_days,
         min_score=min_score,
+        config=config,
     )
 
-    total_qualified = len(to_push) + len(context)
+    total_to_push = sum(len(group["to_push"]) for group in domain_pushes.values())
+    total_context = sum(len(group["context"]) for group in domain_pushes.values())
+    total_qualified = total_to_push + total_context
     print(
-        f"📋 符合标准条目: {total_qualified} 条 (待推送: {len(to_push)}, 上下文参考: {len(context)})"
+        f"📋 符合标准条目: {total_qualified} 条 (待推送: {total_to_push}, 上下文参考: {total_context})"
     )
 
-    if not to_push:
+    if not total_to_push:
         print("ℹ️ 没有新消息需要推送")
         return
 
-    print(f"✅ 符合推送标准(≥{min_score}分): {len(to_push)} 条")
+    print(f"✅ 符合推送标准(≥{min_score}分): {total_to_push} 条")
 
-    # 加载近期已推送事件清单（仅供 LLM 查重，避免风格趋同）
     push_context_days = config["filter"].get("push_context_days", 5)
-    recent_push_context_str = load_recent_push_titles(push_context_days)
+    pushed_domains = 0
+    pushed_entries = 0
 
-    print("🤖 生成推送内容...")
-    try:
-        push_content = await compose_digest(
-            to_push, context, config["llm"], recent_push_context=recent_push_context_str
+    for domain in sort_domains(list(domain_pushes.keys()), config):
+        group = domain_pushes[domain]
+        to_push = group["to_push"]
+        context = group["context"]
+        if not to_push:
+            continue
+
+        last_push_time = group["last_push_time"]
+        if last_push_time:
+            print(f"📌 [{domain}] 上次推送: {last_push_time.strftime('%Y-%m-%d %H:%M')}")
+        print(
+            f"🤖 [{domain}] 生成推送内容 | 待推送: {len(to_push)} 条, 上下文: {len(context)} 条"
         )
-    except Exception as e:
-        print(f"生成汇总推送失败: {e}")
-        await notify_llm_errors("compose_digest", [str(e)], config)
+
+        recent_push_context_str = load_recent_push_titles(
+            push_context_days, domain=domain
+        )
+        try:
+            push_content = await compose_digest(
+                to_push,
+                context,
+                config["llm"],
+                recent_push_context=recent_push_context_str,
+                domain=domain,
+            )
+        except Exception as e:
+            print(f"[{domain}] 生成汇总推送失败: {e}")
+            await notify_llm_errors(f"compose_digest:{domain}", [str(e)], config)
+            continue
+
+        if not push_content.strip():
+            print(f"⚠️ [{domain}] 推送内容为空，跳过")
+            continue
+
+        await send_to_platforms(push_content, config["push"], title=f"{domain} 资讯汇总")
+
+        push_file = get_push_file(domain=domain)
+        save_push_file(
+            push_file,
+            push_content,
+            len(to_push),
+            len(to_push),
+            domain=domain,
+        )
+        print(f"💾 [{domain}] 已保存到 {push_file}")
+
+        pushed_domains += 1
+        pushed_entries += len(to_push)
+
+    if not pushed_domains:
+        print("⚠️ 所有 domain 的推送内容都未成功生成")
         return
 
-    await send_to_platforms(push_content, config["push"])
-
-    push_file = get_push_file()
-    save_push_file(push_file, push_content, len(to_push), len(to_push))
-    print(f"💾 已保存到 {push_file}")
-
-    print(f"✅ Push Job 完成 | 推送: {len(to_push)} 条")
+    print(f"✅ Push Job 完成 | domain: {pushed_domains} 个 | 推送: {pushed_entries} 条")
 
 
 async def fetch_loop(config: Dict):

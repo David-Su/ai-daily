@@ -32,7 +32,7 @@
                  ┌─────────────────────┐
                  │   news-data/        │
                  │   ├── fetch-*.json  │
-                 │   └── push-*.md     │
+                 │   └── push/<domain>/│
                  └─────────────────────┘
 ```
 
@@ -63,7 +63,7 @@ flowchart LR
     subgraph Push循环 ["📅 Push Loop"]
         CRON{cron定时触发}
         PROC[读取评分数据]
-        PUSH[生成 push-*.md]
+        PUSH[生成 push/<domain>/push-*.md]
         PLAT[推送至 Discord/飞书]
     end
 
@@ -104,23 +104,22 @@ await asyncio.gather(
 - 启动前执行一次 LLM 可用性检查
 - 检查失败时直接退出，避免系统带病运行
 
-**collect_entries_for_push()** - 条目收集核心：
+**collect_entries_for_domain_pushes()** - 按 domain 收集核心：
 
 ```python
-def collect_entries_for_push(
-    last_push_time: Optional[datetime],
+def collect_entries_for_domain_pushes(
     context_days: int = 2,
     min_score: int = 60,
-) -> tuple[List[Dict], List[Dict]]:
+) -> Dict[str, Dict]:
     """
-    返回 (待推送条目, 上下文条目)
+    返回每个 domain 独立的待推送条目、上下文条目和推送边界
 
     逻辑：
     1. 获取 context_days 天的所有条目
     2. 按 min_score 过滤
-    3. push_cutoff = max(last_push_time, now - 24h)
-    4. 晚于 push_cutoff → 待推送
-    5. 早于 push_cutoff → 上下文（用于LLM去重）
+    3. 根据 entry.domain 分组
+    4. 每个 domain 独立读取最新 push 文件并计算 push_cutoff
+    5. 晚于 push_cutoff → 待推送；早于 push_cutoff → 上下文
     """
 ```
 
@@ -311,7 +310,7 @@ daily-news/
 ├── requirements.txt
 ├── news-data/           # 数据目录
 │   ├── fetch-*.json
-│   └── push-*.md
+│   └── push/<domain>/push-*.md
 ├── prompts/             # LLM 提示词
 │   ├── score.txt
 │   ├── immediate_push.txt
@@ -378,7 +377,7 @@ python tests/fetch_news.py --max-per-domain 10
 # 默认模式：从 fetch 数据读取发送
 python tests/push_news.py
 
-# 模拟真实推送：从 news-data/push-*.md 最新文件发送
+# 模拟真实推送：从 news-data/push/*/push-*.md 最新文件发送
 python tests/push_news.py --real
 ```
 

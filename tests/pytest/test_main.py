@@ -3,9 +3,9 @@
 import json
 import pytest
 import sys
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -13,7 +13,8 @@ from main import (
     now_local,
     parse_time_to_local,
     calculate_push_times,
-    collect_entries_for_push,
+    collect_entries_for_domain_pushes,
+    run_push_job,
     main as run_main,
 )
 
@@ -82,175 +83,152 @@ class TestCalculatePushTimes:
         assert times == []
 
 
-class TestCollectEntriesForPush:
-    """测试收集推送条目"""
+class TestCollectEntriesForDomainPushes:
+    """测试按 domain 收集推送条目"""
 
-    def test_collect_no_files(self, temp_dir):
-        to_push, context = collect_entries_for_push(
-            last_push_time=None, context_days=2, min_score=60, data_dir=str(temp_dir)
-        )
-        assert to_push == []
-        assert context == []
+    def test_collect_entries_for_domain_pushes(self, temp_dir, sample_config):
+        from src.config import get_timezone
 
-    def test_collect_with_low_score(self, temp_dir):
-        now = datetime.now(timezone.utc)
-
+        tz = get_timezone(sample_config)
+        now = datetime.now(tz)
         data = {
             "meta": {"date": now.date().isoformat()},
             "entries": [
                 {
-                    "title": "Low Score",
-                    "link": "https://example.com/1",
-                    "score": 30,
-                    "fetched_at": now.isoformat(),
-                }
-            ],
-        }
-
-        fetch_file = temp_dir / f"fetch-{now.date().isoformat()}.json"
-        with open(fetch_file, "w") as f:
-            json.dump(data, f)
-
-        to_push, context = collect_entries_for_push(
-            last_push_time=None, context_days=2, min_score=60, data_dir=str(temp_dir)
-        )
-
-        assert len(to_push) == 0
-
-    def test_collect_with_high_score(self, temp_dir):
-        now = datetime.now(timezone.utc)
-
-        data = {
-            "meta": {"date": now.date().isoformat()},
-            "entries": [
-                {
-                    "title": "High Score",
-                    "link": "https://example.com/1",
+                    "title": "AI Entry",
+                    "link": "https://example.com/ai",
+                    "domain": "AI",
                     "score": 85,
                     "fetched_at": now.isoformat(),
-                }
-            ],
-        }
-
-        fetch_file = temp_dir / f"fetch-{now.date().isoformat()}.json"
-        with open(fetch_file, "w") as f:
-            json.dump(data, f)
-
-        to_push, context = collect_entries_for_push(
-            last_push_time=None, context_days=2, min_score=60, data_dir=str(temp_dir)
-        )
-
-        assert len(to_push) == 1
-        assert to_push[0]["score"] == 85
-
-    def test_collect_with_last_push_time(self, temp_dir):
-        now = datetime.now(timezone.utc)
-        last_push = now - timedelta(hours=2)
-
-        data = {
-            "meta": {"date": now.date().isoformat()},
-            "entries": [
+                },
                 {
-                    "title": "New Entry",
-                    "link": "https://example.com/1",
-                    "score": 80,
+                    "title": "Investment Entry",
+                    "link": "https://example.com/investment",
+                    "domain": "投资",
+                    "score": 88,
                     "fetched_at": now.isoformat(),
                 },
-                {
-                    "title": "Old Entry",
-                    "link": "https://example.com/2",
-                    "score": 80,
-                    "fetched_at": last_push.isoformat(),
-                },
             ],
         }
 
         fetch_file = temp_dir / f"fetch-{now.date().isoformat()}.json"
-        with open(fetch_file, "w") as f:
-            json.dump(data, f)
+        fetch_file.write_text(json.dumps(data), encoding="utf-8")
 
-        to_push, context = collect_entries_for_push(
-            last_push_time=last_push,
+        result = collect_entries_for_domain_pushes(
             context_days=2,
             min_score=60,
             data_dir=str(temp_dir),
+            config=sample_config,
         )
 
-        assert len(to_push) == 1
-        assert to_push[0]["title"] == "New Entry"
+        assert set(result.keys()) == {"AI", "投资"}
+        assert result["AI"]["to_push"][0]["title"] == "AI Entry"
+        assert result["投资"]["to_push"][0]["title"] == "Investment Entry"
 
-    def test_collect_context_limit(self, temp_dir):
-        now = datetime.now(timezone.utc)
-
-        entries = [
-            {
-                "title": f"Entry{i}",
-                "link": f"https://example.com/{i}",
-                "score": 50 + i,
-                "fetched_at": now.isoformat(),
-            }
-            for i in range(60)
-        ]
-
-        data = {"meta": {"date": now.date().isoformat()}, "entries": entries}
-
-        fetch_file = temp_dir / f"fetch-{now.date().isoformat()}.json"
-        with open(fetch_file, "w") as f:
-            json.dump(data, f)
-
-        to_push, context = collect_entries_for_push(
-            last_push_time=None, context_days=2, min_score=60, data_dir=str(temp_dir)
-        )
-
-        assert len(context) <= 50
-
-    def test_collect_multi_day(self, temp_dir):
+    def test_collect_domain_pushes_uses_domain_cutoff(self, temp_dir, sample_config):
         from src.config import get_timezone
 
-        tz = get_timezone()
-        today = datetime.now(tz)
-        yesterday = today - timedelta(days=1)
+        tz = get_timezone(sample_config)
+        now = datetime.now(tz)
+        last_ai_push = now - timedelta(hours=1)
+        older_entry_time = now - timedelta(hours=2)
 
-        today_data = {
-            "meta": {"date": today.date().isoformat()},
+        data = {
+            "meta": {"date": now.date().isoformat()},
             "entries": [
                 {
-                    "title": "Today Entry",
-                    "link": "https://example.com/1",
-                    "score": 80,
-                    "fetched_at": today.isoformat(),
-                }
+                    "title": "Old AI Entry",
+                    "link": "https://example.com/ai-old",
+                    "domain": "AI",
+                    "score": 85,
+                    "fetched_at": older_entry_time.isoformat(),
+                },
+                {
+                    "title": "Old Investment Entry",
+                    "link": "https://example.com/investment-old",
+                    "domain": "投资",
+                    "score": 88,
+                    "fetched_at": older_entry_time.isoformat(),
+                },
             ],
         }
 
-        yesterday_data = {
-            "meta": {"date": yesterday.date().isoformat()},
-            "entries": [
-                {
-                    "title": "Yesterday Entry",
-                    "link": "https://example.com/2",
-                    "score": 75,
-                    "fetched_at": yesterday.isoformat(),
-                }
-            ],
-        }
-
-        (temp_dir / f"fetch-{today.date().isoformat()}.json").write_text(
-            json.dumps(today_data)
+        fetch_file = temp_dir / f"fetch-{now.date().isoformat()}.json"
+        fetch_file.write_text(json.dumps(data), encoding="utf-8")
+        ai_push_dir = temp_dir / "push" / "AI"
+        ai_push_dir.mkdir(parents=True)
+        ai_push_file = ai_push_dir / (
+            f"push-{last_ai_push.strftime('%Y-%m-%d-%H-%M-%S')}.md"
         )
-        (temp_dir / f"fetch-{yesterday.date().isoformat()}.json").write_text(
-            json.dumps(yesterday_data)
+        ai_push_file.write_text(
+            '---\ndomain: "AI"\n---\n\n# AI push',
+            encoding="utf-8",
         )
 
-        to_push, context = collect_entries_for_push(
-            last_push_time=None, context_days=2, min_score=60, data_dir=str(temp_dir)
+        result = collect_entries_for_domain_pushes(
+            context_days=2,
+            min_score=60,
+            data_dir=str(temp_dir),
+            config=sample_config,
         )
 
-        assert len(to_push) >= 1
+        assert result["AI"]["to_push"] == []
+        assert result["AI"]["context"][0]["title"] == "Old AI Entry"
+        assert result["投资"]["to_push"][0]["title"] == "Old Investment Entry"
 
 
 class TestMainStartup:
     """测试主程序启动流程"""
+
+    @pytest.mark.asyncio
+    async def test_run_push_job_pushes_each_domain_separately(
+        self, sample_config, temp_dir
+    ):
+        domain_pushes = {
+            "AI": {
+                "to_push": [{"title": "AI Entry", "domain": "AI", "score": 90}],
+                "context": [],
+                "last_push_time": None,
+                "push_cutoff": datetime.now(timezone.utc),
+            },
+            "投资": {
+                "to_push": [{"title": "Investment Entry", "domain": "投资", "score": 92}],
+                "context": [],
+                "last_push_time": None,
+                "push_cutoff": datetime.now(timezone.utc),
+            },
+        }
+
+        def push_file_for_domain(domain=None):
+            return str(temp_dir / "push" / domain / "push-test.md")
+
+        with patch(
+            "main.collect_entries_for_domain_pushes", return_value=domain_pushes
+        ), patch("main.load_recent_push_titles", return_value=""), patch(
+            "main.compose_digest", new_callable=AsyncMock
+        ) as mock_compose, patch(
+            "main.send_to_platforms", new_callable=AsyncMock
+        ) as mock_send, patch(
+            "main.get_push_file", side_effect=push_file_for_domain
+        ) as mock_get_push_file, patch(
+            "main.save_push_file"
+        ) as mock_save_push_file:
+            mock_compose.side_effect = ["# AI Digest", "# Investment Digest"]
+
+            await run_push_job(sample_config)
+
+        compose_domains = [
+            call.kwargs["domain"] for call in mock_compose.await_args_list
+        ]
+        sent_titles = [call.kwargs["title"] for call in mock_send.await_args_list]
+        saved_domains = [
+            call.kwargs["domain"] for call in mock_save_push_file.call_args_list
+        ]
+
+        assert compose_domains == ["AI", "投资"]
+        assert sent_titles == ["AI 资讯汇总", "投资 资讯汇总"]
+        assert saved_domains == ["AI", "投资"]
+        assert mock_get_push_file.call_count == 2
 
     @pytest.mark.asyncio
     async def test_main_checks_llm_before_starting_loops(self, sample_config):

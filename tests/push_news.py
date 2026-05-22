@@ -9,7 +9,7 @@
 使用方法:
     python tests/push_news.py                  # 默认从 fetch 数据读取发送 (--fake)
     python tests/push_news.py --fake           # 从 fetch 数据读取发送
-    python tests/push_news.py --real           # 从 news-data/push-*.md 最新文件发送
+    python tests/push_news.py --real           # 从 news-data/push/*/push-*.md 最新文件发送
 """
 
 import argparse
@@ -42,7 +42,7 @@ def parse_args():
         "--fake", action="store_true", help="从 fetch 数据读取发送（默认）"
     )
     parser.add_argument(
-        "--real", action="store_true", help="从 news-data/push-*.md 最新文件发送"
+        "--real", action="store_true", help="从 news-data/push/*/push-*.md 最新文件发送"
     )
     return parser.parse_args()
 

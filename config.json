@@ -37,11 +37,13 @@
         "domains": [
           {
             "key": "AI",
-            "score_standard": "prompts/domains/AI.md"
+            "score_standard": "prompts/domains/AI.md",
+            "digest": "prompts/digest.md"
           },
           {
             "key": "投资",
-            "score_standard": "prompts/domains/investment.md"
+            "score_standard": "prompts/domains/investment.md",
+            "digest": "prompts/digest_investment.md"
           }
         ]
       },

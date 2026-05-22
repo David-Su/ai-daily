@@ -3,7 +3,7 @@
 import json
 import pytest
 import sys
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
@@ -43,13 +43,18 @@ class TestGetPushFile:
 
     def test_get_push_file_default(self):
         result = get_push_file()
-        assert "push-" in result
+        assert str(Path("push") / "未分类" / "push-") in result
         assert result.endswith(".md")
 
     def test_get_push_file_specific_time(self):
         dt = datetime(2024, 1, 15, 8, 30, 0)
         result = get_push_file(dt)
         assert "push-2024-01-15-08-30-00.md" in result
+
+    def test_get_push_file_with_domain(self):
+        dt = datetime(2024, 1, 15, 8, 30, 0)
+        result = get_push_file(dt, domain="AI")
+        assert str(Path("push") / "AI" / "push-2024-01-15-08-30-00.md") in result
 
 
 class TestExtractPushTime:
@@ -66,6 +71,13 @@ class TestExtractPushTime:
         result = extract_push_time("invalid.md")
         assert result is None
 
+    def test_extract_valid_time_in_domain_folder(self):
+        result = extract_push_time("news-data/push/AI/push-2024-01-15-08-30-00.md")
+        assert result is not None
+        assert result.year == 2024
+        assert result.month == 1
+        assert result.day == 15
+
 
 class TestGetLastPushFile:
     """测试获取最新push文件"""
@@ -75,11 +87,31 @@ class TestGetLastPushFile:
         assert result is None
 
     def test_get_last_push_file_exists(self, temp_dir):
-        (temp_dir / "push-2024-01-14-10-00-00.md").touch()
-        (temp_dir / "push-2024-01-15-10-00-00.md").touch()
+        domain_dir = temp_dir / "push" / "AI"
+        domain_dir.mkdir(parents=True)
+        (domain_dir / "push-2024-01-14-10-00-00.md").touch()
+        (domain_dir / "push-2024-01-15-10-00-00.md").touch()
 
         result = get_last_push_file(str(temp_dir))
         assert "2024-01-15" in result
+
+    def test_get_last_push_file_by_domain(self, temp_dir):
+        ai_dir = temp_dir / "push" / "AI"
+        investment_dir = temp_dir / "push" / "投资"
+        ai_dir.mkdir(parents=True)
+        investment_dir.mkdir(parents=True)
+
+        (ai_dir / "push-2024-01-15-08-00-00.md").write_text(
+            '---\ndomain: "AI"\n---\n\n# AI',
+            encoding="utf-8",
+        )
+        (investment_dir / "push-2024-01-15-09-00-00.md").write_text(
+            '---\ndomain: "投资"\n---\n\n# Investment',
+            encoding="utf-8",
+        )
+
+        result = get_last_push_file(str(temp_dir), domain="AI")
+        assert str(Path("push") / "AI" / "push-2024-01-15-08-00-00.md") in result
 
 
 class TestReadWriteEntries:
@@ -207,9 +239,21 @@ class TestSavePushFile:
             content = f.read()
 
         assert "pushDate:" in content
+        assert 'domain: "未分类"' in content
         assert "sourceCount: 5" in content
         assert "totalEntries: 10" in content
         assert "# Test Push" in content
+
+    def test_save_push_file_with_domain(self, temp_dir):
+        filepath = str(temp_dir / "push" / "AI" / "push-test.md")
+        content = "# Test Push\n\nContent here"
+
+        save_push_file(filepath, content, 5, 10, domain="AI")
+
+        with open(filepath, "r") as f:
+            content = f.read()
+
+        assert 'domain: "AI"' in content
 
 
 class TestLoadExistingLinks:
@@ -247,11 +291,13 @@ class TestCleanupOldFiles:
     def test_cleanup_push_files(self, temp_dir):
         old_time = datetime.now() - timedelta(days=10)
         new_time = datetime.now() - timedelta(days=1)
+        domain_dir = temp_dir / "push" / "AI"
+        domain_dir.mkdir(parents=True)
 
-        (temp_dir / f"push-{old_time.strftime('%Y-%m-%d-%H-%M-%S')}.md").touch()
-        (temp_dir / f"push-{new_time.strftime('%Y-%m-%d-%H-%M-%S')}.md").touch()
+        (domain_dir / f"push-{old_time.strftime('%Y-%m-%d-%H-%M-%S')}.md").touch()
+        (domain_dir / f"push-{new_time.strftime('%Y-%m-%d-%H-%M-%S')}.md").touch()
 
         cleanup_old_files(days=7, data_dir=str(temp_dir))
 
-        files = list(temp_dir.glob("push-*.md"))
+        files = list(domain_dir.glob("push-*.md"))
         assert len(files) == 1

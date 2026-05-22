@@ -160,10 +160,16 @@ async def _trigger_immediate_push_error(config):
 async def _trigger_digest_error(config):
     with (
         patch(
-            "src.main.collect_entries_for_push",
-            return_value=([dict(entry) for entry in MOCK_DIGEST_ENTRIES], []),
+            "src.main.collect_entries_for_domain_pushes",
+            return_value={
+                "AI": {
+                    "to_push": [dict(entry) for entry in MOCK_DIGEST_ENTRIES],
+                    "context": [],
+                    "last_push_time": None,
+                    "push_cutoff": None,
+                }
+            },
         ),
-        patch("src.main.get_last_push_file", return_value=None),
         patch(
             "src.main.compose_digest",
             side_effect=RuntimeError("manual mock compose digest error"),

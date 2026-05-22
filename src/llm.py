@@ -106,10 +106,13 @@ async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:
 
 
 def _build_batch_prompt(
-        config: Dict,
-        entries: List[Dict],
+    config: Dict,
+    entries: List[Dict] = None,
 ) -> str:
     """构建批量评分prompt"""
+    if entries is None:
+        entries = config
+        config = {}
 
     # 构建评分标准
     score_standard = _build_score_standard(config)
@@ -155,6 +158,19 @@ def _build_score_standard(config: Dict) -> str:
         standards.append(f"### {key}\n{standard_content}")
 
     return "\n".join(standards)
+
+
+def _get_domain_prompt_path(config: Dict, domain: str) -> Optional[str]:
+    """按 domain 选择 digest 提示词路径，未配置时回退到全局提示词。"""
+    prompts = config.get("prompts", {})
+    domain_name = (domain or "").strip()
+
+    domain_config = prompts.get("domain", {})
+    for domain_item in domain_config.get("domains", []):
+        if domain_item.get("key") == domain_name and domain_item.get("digest"):
+            return domain_item["digest"]
+
+    return prompts.get("digest")
 
 
 def _parse_llm_json_response(response: str) -> List[Dict]:
@@ -407,6 +423,7 @@ async def compose_digest(
     context: List[Dict],
     config: Dict,
     recent_push_context: str = "",
+    domain: str = None,
 ) -> str:
     """生成定时汇总推送内容
 
@@ -415,8 +432,11 @@ async def compose_digest(
         context: 历史碎片化信息（用于去重参考），只保留 title, published, tags, summary, source
         config: LLM配置
         recent_push_context: 近期汇总推送上下文，用于去重
+        domain: 当前汇总所属 domain，用于选择 domain 专属 digest prompt
     """
-    prompt_path = config.get("prompts", {}).get("digest", "prompts/digest.md")
+    prompt_path = _get_domain_prompt_path(config, domain)
+    if not prompt_path:
+        raise ValueError(f"未配置 domain={domain or ''} 的 digest prompt")
 
     # context 只保留必要字段，拼接成字符串
     context_text = []

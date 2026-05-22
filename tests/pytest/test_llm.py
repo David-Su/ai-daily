@@ -3,9 +3,8 @@
 import json
 import pytest
 import sys
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -18,6 +17,7 @@ from llm import (
     _score_single_batch,
     call_llm,
     check_llm_available,
+    compose_digest,
     generate_immediate_push,
     score_batch,
 )
@@ -253,6 +253,50 @@ class TestImmediatePush:
 
         assert content == ""
         assert error == "生成即时推送失败: boom"
+
+
+class TestComposeDigest:
+    """测试汇总推送生成"""
+
+    @pytest.mark.asyncio
+    async def test_compose_digest_uses_domain_prompt(self, sample_entries, temp_dir):
+        default_prompt = temp_dir / "digest.md"
+        default_prompt.write_text(
+            "default {count} {entries} {context} {recent_push_context} {date}",
+            encoding="utf-8",
+        )
+        investment_prompt = temp_dir / "digest_investment.md"
+        investment_prompt.write_text(
+            "investment {count} {entries} {context} {recent_push_context} {date}",
+            encoding="utf-8",
+        )
+        config = {
+            "prompts": {
+                "digest": str(default_prompt),
+                "domain": {
+                    "domains": [
+                        {
+                            "key": "投资",
+                            "digest": str(investment_prompt),
+                        }
+                    ]
+                },
+            }
+        }
+
+        with patch("llm.call_llm", new_callable=AsyncMock) as mock_call:
+            mock_call.return_value = "# digest"
+            result = await compose_digest(
+                sample_entries[:1],
+                [],
+                config,
+                recent_push_context="",
+                domain="投资",
+            )
+
+        prompt = mock_call.await_args.args[0]
+        assert result == "# digest"
+        assert prompt.startswith("investment")
 
 
 class TestScoreBatch:
