@@ -22,10 +22,15 @@ from src.llm import (
     check_llm_available,
     compose_digest,
     generate_immediate_push,
+    parse_immediate_push_with_metadata,
     score_batch,
 )
 from src.processor import html_to_markdown
 from src.push import send_to_platforms
+from src.sections.github.section import run_github_section
+from src.sections.hackernews.section import run_hackernews_section
+from src.sections.insights.section import run_insights_section
+from src.sections.rss.section import run_rss_section
 from src.storage import (
     append_entries,
     assemble_with_sentinels,
@@ -42,10 +47,6 @@ from src.storage import (
     save_notify_file,
     save_push_file,
 )
-from src.sections.github.section import run_github_section
-from src.sections.hackernews.section import run_hackernews_section
-from src.sections.insights.section import run_insights_section
-from src.sections.rss.section import run_rss_section
 
 
 async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
@@ -170,14 +171,15 @@ def collect_entries_for_push(
     # 分割条目
     to_push = []
     context = []
+    # context 只供 LLM 做去重/历史参考,不需要 content/link/fetched_at 等大字段
+    CONTEXT_FIELDS = ("title", "source", "score", "summary", "tags", "published")
 
     for entry in qualified_entries:
         entry_time = parse_time_to_local(entry.get("fetched_at", ""))
         if entry_time and entry_time > push_cutoff:
             to_push.append(entry)
         else:
-            # 上下文条目只保留必要字段
-            context.append(entry)
+            context.append({k: entry.get(k) for k in CONTEXT_FIELDS})
 
     # 上下文按分数排序，取前50
     context = sorted(context, key=lambda x: x.get("score", 0), reverse=True)[:50]
@@ -295,10 +297,23 @@ async def run_fetch_job(config: Dict):
         if no_content_marker in push_content:
             print(f"ℹ️ 无新内容需要推送 (LLM判定为重复内容)")
         else:
-            await send_to_platforms(push_content, config["push"])
+            # 提取标题并构建 metadata
+            now = now_local(config)
+            timestamp = now.strftime("%Y-%m-%d %H:%M")
+            content_without_title, metadata = parse_immediate_push_with_metadata(
+                push_content, f"🚨 AI Daily 快讯 | {timestamp}"
+            )
+            metadata["pushTime"] = now.isoformat()
+
+            await send_to_platforms(
+                content_without_title,
+                config["push"],
+                "🚨 AI Daily 快讯 | " + metadata["title"],
+                metadata=metadata,
+            )
             # 保存即时推送内容到notify文件
             notify_file = get_notify_file()
-            save_notify_file(notify_file, push_content)
+            save_notify_file(notify_file, content_without_title, metadata)
             print(f"💾 已保存即时推送到 {notify_file}")
 
     print(f"✅ Fetch Job 完成 | 新消息: {len(scored)} 条 | 热点: {len(hot_entries)} 条")
@@ -329,9 +344,7 @@ async def _run_default_push(config: Dict):
         context_days=context_days,
         min_score=min_score,
     )
-    print(
-        f"📋 待推送 {len(to_push)} / 上下文 {len(context)} (≥{min_score} 分)"
-    )
+    print(f"📋 待推送 {len(to_push)} / 上下文 {len(context)} (≥{min_score} 分)")
     if not to_push:
         print("ℹ️ 没有新消息需要推送")
         return
@@ -341,7 +354,7 @@ async def _run_default_push(config: Dict):
 
     print("🤖 生成推送内容...")
     try:
-        push_content = await compose_digest(
+        raw_digest = await compose_digest(
             to_push, context, config["llm"], recent_push_context=recent
         )
     except Exception as e:
@@ -349,9 +362,29 @@ async def _run_default_push(config: Dict):
         await notify_llm_errors("compose_digest", [str(e)], config)
         raise
 
-    await send_to_platforms(push_content, config["push"])
+    # 解析 frontmatter:title / lead / highlights 由 LLM 生成,缺失时回退到默认
+    from src.llm import parse_digest_with_metadata
+
+    now = now_local(config)
+    date_str = now.strftime("%Y-%m-%d")
+    push_content, metadata = parse_digest_with_metadata(raw_digest, date_str)
+    metadata["pushTime"] = now.isoformat()
+
+    await send_to_platforms(
+        push_content,
+        config["push"],
+        title="📰 AI Daily 每日精选 | " + metadata["title"],
+        metadata=metadata,
+    )
     push_file = get_push_file()
-    save_push_file(push_file, push_content, len(to_push), len(to_push), profile="default")
+    save_push_file(
+        push_file,
+        push_content,
+        len(to_push),
+        len(to_push),
+        profile="default",
+        metadata=metadata,
+    )
     print(f"💾 已保存到 {push_file}")
     print(f"✅ Push Job 完成 | 推送: {len(to_push)} 条")
 
@@ -371,7 +404,9 @@ async def _run_morning_push(config: Dict):
         run_hackernews_section(config, now),
     )
 
-    rss_md, rss_err = rss_result
+    # 早报场景:digest 的 metadata 通常会被 insights 段覆盖,
+    # 但保留以便在 insights 失败时作为兜底来源(title 关键词 / lead / highlights)
+    rss_md, digest_meta, rss_err = rss_result
     gh_md, gh_err = gh_result
     hn_md, hn_err = hn_result
 
@@ -384,11 +419,32 @@ async def _run_morning_push(config: Dict):
         await notify_llm_errors("compose_digest", [rss_err], config)
         raise RuntimeError(f"RSS section failed: {rss_err}")
 
-    insights_md, insights_err = await run_insights_section(
+    insights_md, metadata, insights_err = await run_insights_section(
         rss_md, gh_md, hn_md, config, now
     )
     if insights_err:
         await notify_llm_errors("insights", [insights_err], config)
+
+    # 如果 insights 失败,优先用 digest metadata 兜底;两者都缺再走默认
+    if not metadata:
+        date_str = now.strftime("%Y-%m-%d")
+        fallback = digest_meta or {}
+        digest_title = fallback.get("title", "")
+
+        title = digest_title if digest_title else f"📰 AI Daily 每日精选 | {date_str}"
+        metadata = {
+            "date": date_str,
+            "pushTime": now.isoformat(),
+            "title": title,
+            "excerpt": "",
+            "seotitle": "",
+            "seodescription": "",
+            "lead": fallback.get("lead", ""),
+            "highlights": fallback.get("highlights", []),
+            "profile": "morning",
+        }
+    else:
+        metadata.setdefault("pushTime", now.isoformat())
 
     final = assemble_with_sentinels(
         {
@@ -403,10 +459,17 @@ async def _run_morning_push(config: Dict):
         print("ℹ️ 早报无任何段输出,跳过推送")
         return
 
-    await send_to_platforms(final, config["push"])
+    await send_to_platforms(
+        final,
+        config["push"],
+        title="📰 AI Daily 每日精选 | " + metadata["title"],
+        metadata=metadata,
+    )
     push_file = get_push_file()
     rss_count = rss_md.count("###") if rss_md else 0
-    save_push_file(push_file, final, rss_count, rss_count, profile="morning")
+    save_push_file(
+        push_file, final, rss_count, rss_count, profile="morning", metadata=metadata
+    )
     print(f"💾 已保存早报到 {push_file}")
 
 
@@ -597,9 +660,7 @@ def _parse_args() -> argparse.Namespace:
     sub.add_parser("push", help="单次推送并退出")
     sub.add_parser("loop", help="长跑模式（开发/调试用）")
     sub.add_parser("github", help="单独跑一次 GitHub Trending 板块（仅打印,不推送）")
-    sub.add_parser(
-        "hackernews", help="单独跑一次 Hacker News 板块（仅打印,不推送）"
-    )
+    sub.add_parser("hackernews", help="单独跑一次 Hacker News 板块（仅打印,不推送）")
     return parser.parse_args()
 
 

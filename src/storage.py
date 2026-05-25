@@ -2,13 +2,35 @@
 
 import json
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import yaml
-
 from src.config import get_timezone
+
+
+def _yaml_value(v) -> str:
+    """把单个值序列化为 YAML 合法的 token,借道 JSON 语法。
+
+    依据:JSON 是 YAML 1.2 的真子集,任何 json.dumps 的输出都是合法 YAML 标量/序列/映射。
+    始终带引号的字符串可以避免 PyYAML 的若干怪癖(折行、未引号字符串歧义、unicode 转义)。
+    """
+    if isinstance(v, (dict, list, str)):
+        return json.dumps(v, ensure_ascii=False)
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if v is None:
+        return ""
+    return str(v)
+
+
+def _dump_frontmatter(meta: Dict) -> str:
+    """把扁平 metadata dict 序列化为 frontmatter 文本。
+
+    保留插入顺序(title 在前,bookkeeping 字段在后)。仅支持扁平结构 —— 当前所有
+    metadata 都是扁平的,无需处理嵌套。
+    """
+    return "".join(f"{k}: {_yaml_value(v)}\n" for k, v in meta.items())
 
 
 def get_fetch_file(d: date = None, data_dir: str = "news-data") -> str:
@@ -21,7 +43,7 @@ def get_fetch_file(d: date = None, data_dir: str = "news-data") -> str:
 def get_push_file(push_time: datetime = None, data_dir: str = "news-data") -> str:
     """生成push文件路径"""
     if push_time is None:
-        push_time = datetime.now()
+        push_time = datetime.now(get_timezone())
     time_str = push_time.strftime("%Y-%m-%d-%H-%M-%S")
     return f"{data_dir}/push-{time_str}.md"
 
@@ -33,21 +55,25 @@ def get_notify_file(d: date = None, data_dir: str = "news-data") -> str:
     return f"{data_dir}/notify-{d.isoformat()}.md"
 
 
-def save_notify_file(filepath: str, content: str):
+def save_notify_file(
+    filepath: str,
+    content: str,
+    metadata: Dict = None,
+):
     """保存即时推送文件（Markdown格式），同一天的内容追加到同一文件"""
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     notify_time = datetime.now(get_timezone()).isoformat()
 
-    new_content = f"""---
-pushTime: "{notify_time}"
----
+    if metadata:
+        frontmatter_dict = metadata.copy()
+    else:
+        frontmatter_dict = {"pushTime": notify_time}
 
-{content}
+    frontmatter = _dump_frontmatter(frontmatter_dict)
 
-------
-"""
+    new_content = f"---\n{frontmatter}---\n\n{content}\n\n------\n"
 
     with open(path, "a", encoding="utf-8") as f:
         f.write(new_content)
@@ -136,7 +162,9 @@ def _section_re(section: str) -> re.Pattern:
     """获取/缓存 sentinel 正则。section 名做转义,允许字母数字下划线"""
     if section not in _SECTION_RE_CACHE:
         s = re.escape(section)
-        pattern = rf"<!--\s*SECTION:{s}\s*BEGIN\s*-->(.*?)<!--\s*SECTION:{s}\s*END\s*-->"
+        pattern = (
+            rf"<!--\s*SECTION:{s}\s*BEGIN\s*-->(.*?)<!--\s*SECTION:{s}\s*END\s*-->"
+        )
         _SECTION_RE_CACHE[section] = re.compile(pattern, flags=re.DOTALL)
     return _SECTION_RE_CACHE[section]
 
@@ -197,9 +225,7 @@ def load_recent_notify_titles(
     return "\n".join(f"- [{t}] {title}" if t else f"- {title}" for t, title in items)
 
 
-def load_recent_push_titles(
-    context_days: int = 3, data_dir: str = "news-data"
-) -> str:
+def load_recent_push_titles(context_days: int = 3, data_dir: str = "news-data") -> str:
     """加载最近 context_days 天 push 文件的事件标题清单（仅供 LLM 查重）"""
     data_path = Path(data_dir)
     if not data_path.exists():
@@ -398,27 +424,39 @@ def save_push_file(
     source_count: int,
     total_entries: int,
     profile: str = "default",
+    metadata: Dict = None,
 ):
     """保存推送文件（Markdown格式）
 
     Args:
         profile: "morning" | "default"  ← 早报或常规;写入 frontmatter,便于按 profile 分析
+        metadata: 元信息（可选），如果提供则使用 metadata，否则使用默认格式
     """
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    push_time = datetime.now(get_timezone())
-    frontmatter = (
-        "---\n"
-        f'pushDate: "{push_time.isoformat()}"\n'
-        f'profile: "{profile}"\n'
-        f"sourceCount: {source_count}\n"
-        f"totalEntries: {total_entries}\n"
-        "---\n\n"
-    )
+    if metadata:
+        # 使用提供的 metadata
+        frontmatter_dict = metadata.copy()
+        # 添加推送时间和统计信息
+        frontmatter_dict["pushDate"] = datetime.now(get_timezone()).isoformat()
+        frontmatter_dict["sourceCount"] = source_count
+        frontmatter_dict["totalEntries"] = total_entries
+    else:
+        # 降级：使用默认格式
+        push_time = datetime.now(get_timezone())
+        frontmatter_dict = {
+            "profile": profile,
+            "pushDate": push_time.isoformat(),
+            "sourceCount": source_count,
+            "totalEntries": total_entries,
+        }
+
+    frontmatter = _dump_frontmatter(frontmatter_dict)
+    full_content = f"---\n{frontmatter}---\n\n{content}"
 
     with open(path, "w", encoding="utf-8") as f:
-        f.write(frontmatter + content)
+        f.write(full_content)
 
 
 def load_existing_links(filepath: str, threshold: int = 150) -> set:
@@ -572,8 +610,7 @@ class TrendingHistory:
         self.repos = {
             url: d
             for url, d in self.repos.items()
-            if _parse_iso_date_safe(d) is not None
-            and _parse_iso_date_safe(d) >= cutoff
+            if _parse_iso_date_safe(d) is not None and _parse_iso_date_safe(d) >= cutoff
         }
 
     def save(self) -> None:
@@ -618,5 +655,7 @@ def assemble_with_sentinels(sections: Dict[str, str]) -> str:
         body = (sections.get(key) or "").strip()
         if not body:
             continue
-        parts.append(f"<!-- SECTION:{key} BEGIN -->\n{body}\n<!-- SECTION:{key} END -->")
+        parts.append(
+            f"<!-- SECTION:{key} BEGIN -->\n{body}\n<!-- SECTION:{key} END -->"
+        )
     return "\n\n".join(parts)

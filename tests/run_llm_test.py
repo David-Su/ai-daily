@@ -214,12 +214,13 @@ async def run_llm_test():
         # 筛选高分条目 (>=80分)用于推送
         hot_entries = [e for e in test_entries if e.get("score", 0) >= 90]
         if not hot_entries:
-            hot_entries = test_entries[:2]  # 如果没有高分，取前2条
+            hot_entries = test_entries[-3:-1]  # 如果没有高分，取前2条
 
         print(f"\n使用 {len(hot_entries)} 条高分消息生成推送...")
 
         # 加载近期推送上下文用于测试
         context_days = config.get("filter", {}).get("context_days", 3)
+        from src.llm import parse_immediate_push_with_metadata
         from src.storage import (
             get_notify_file,
             load_recent_notify_titles,
@@ -239,6 +240,13 @@ async def run_llm_test():
             push_content, immediate_push_error = await generate_immediate_push(
                 hot_entries, llm_config, recent_push_context=recent_context
             )
+            timestamp = datetime.now(get_timezone()).strftime("%Y-%m-%d")
+            content_without_title, metadata = parse_immediate_push_with_metadata(
+                push_content, f"🚨 AI Daily 快讯 | {timestamp}"
+            )
+            metadata["pushTime"] = datetime.now(get_timezone()).isoformat()
+            push_content = content_without_title
+
             if immediate_push_error:
                 print(f"\n⚠️ 即时推送生成异常: {immediate_push_error}")
                 push_content = ""
@@ -261,13 +269,16 @@ async def run_llm_test():
                 if push_enabled:
                     print("\n📤 推送消息...")
                     await send_to_platforms(
-                        push_content, config["push"], title="🔥 AI 重磅资讯"
+                        push_content,
+                        config["push"],
+                        title="🚨 AI Daily 快讯 | " + metadata["title"],
+                        metadata=metadata,
                     )
                     print("   ✅ 推送成功!")
 
                 # 保存到 notify 文件
                 notify_file = get_notify_file()
-                save_notify_file(notify_file, push_content)
+                save_notify_file(notify_file, push_content, metadata)
                 print(f"\n💾 已保存即时推送到 {notify_file}")
 
         except Exception as e:
@@ -288,19 +299,30 @@ async def run_llm_test():
         print(f"\n使用 {len(test_entries)} 条消息生成汇总...")
 
         # 加载近期推送上下文
-        push_context_days = config.get("filter", {}).get("push_context_days", 5)
+        push_context_days = config.get(
+            "filter",
+        ).get("push_context_days", 5)
         from src.storage import get_push_file, load_recent_push_titles, save_push_file
 
         recent_push_context_str = load_recent_push_titles(push_context_days)
 
         try:
-            digest_content = await compose_digest(
+            raw_digest = await compose_digest(
                 test_entries,
                 context,
                 llm_config,
                 recent_push_context=recent_push_context_str,
             )
+            from src.llm import parse_digest_with_metadata
+
+            date_str = datetime.now(get_timezone()).strftime("%Y-%m-%d")
+            digest_content, metadata = parse_digest_with_metadata(raw_digest, date_str)
+            metadata["pushTime"] = datetime.now(get_timezone()).isoformat()
+
             print(f"\n✅ 汇总内容生成完成!")
+            print(f"   标题: {metadata['title']}")
+            print(f"   导读: {metadata.get('lead', '')[:60]}")
+            print(f"   重点: {metadata.get('highlights', [])}")
             print(f"\n📰 汇总内容预览:")
             print("-" * 40)
             print(
@@ -314,14 +336,22 @@ async def run_llm_test():
             if push_enabled:
                 print("\n📤 推送消息...")
                 await send_to_platforms(
-                    digest_content, config["push"], title="📰 AI 资讯汇总"
+                    digest_content,
+                    config["push"],
+                    title="📰 AI Daily 每日精选 | " + metadata["title"],
+                    metadata=metadata,
                 )
                 print("   ✅ 推送成功!")
 
             # 保存到 push 文件
             push_file = get_push_file()
             save_push_file(
-                push_file, digest_content, len(test_entries), len(test_entries)
+                push_file,
+                digest_content,
+                len(test_entries),
+                len(test_entries),
+                profile="default",
+                metadata=metadata,
             )
             print(f"\n💾 已保存汇总到 {push_file}")
 

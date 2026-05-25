@@ -13,21 +13,33 @@ from src.sections.rss.section import run_rss_section
 
 @pytest.mark.asyncio
 async def test_returns_markdown_when_entries_present(sample_config, tmp_path):
+    digest_raw = (
+        "---\n"
+        'title: "🌙 AI Daily 晚报 | 测试"\n'
+        'lead: "今日测试导读"\n'
+        "highlights:\n  - 重点1\n"
+        "---\n\n"
+        "### 1️⃣ digest body"
+    )
     with patch(
         "src.main.collect_entries_for_push",
         return_value=([{"link": "x", "title": "t", "score": 80}], []),
     ), patch(
         "src.sections.rss.section.compose_digest",
-        new=AsyncMock(return_value="# digest body"),
+        new=AsyncMock(return_value=digest_raw),
     ), patch(
         "src.sections.rss.section.load_recent_push_titles", return_value=""
     ), patch(
         "src.sections.rss.section.get_last_push_file", return_value=None
     ):
-        md, err = await run_rss_section(sample_config, now=None)
+        md, meta, err = await run_rss_section(sample_config, now=None)
 
-    assert md == "# digest body"
+    assert md == "### 1️⃣ digest body"
     assert err is None
+    assert meta["title"] == "🌙 AI Daily 晚报 | 测试"
+    assert meta["lead"] == "今日测试导读"
+    assert meta["highlights"] == ["重点1"]
+    assert meta["profile"] == "default"
 
 
 @pytest.mark.asyncio
@@ -37,9 +49,10 @@ async def test_returns_empty_when_no_entries(sample_config):
     ), patch(
         "src.sections.rss.section.get_last_push_file", return_value=None
     ):
-        md, err = await run_rss_section(sample_config, now=None)
+        md, meta, err = await run_rss_section(sample_config, now=None)
 
     assert md == ""
+    assert meta is None
     assert err is None
 
 
@@ -56,7 +69,8 @@ async def test_returns_error_on_compose_failure(sample_config):
     ), patch(
         "src.sections.rss.section.get_last_push_file", return_value=None
     ):
-        md, err = await run_rss_section(sample_config, now=None)
+        md, meta, err = await run_rss_section(sample_config, now=None)
 
     assert md == ""
+    assert meta is None
     assert "LLM down" in err

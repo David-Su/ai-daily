@@ -35,8 +35,9 @@ def _cfg() -> dict:
 async def test_disabled_returns_empty():
     cfg = _cfg()
     cfg["sections"]["insights"]["enabled"] = False
-    md, err = await run_insights_section("rss", "gh", "hn", cfg, now=None)
+    md, meta, err = await run_insights_section("rss", "gh", "hn", cfg, now=None)
     assert md == ""
+    assert meta is None
     assert err is None
 
 
@@ -45,19 +46,21 @@ async def test_marks_empty_sections_for_llm():
     cfg = _cfg()
     captured = {}
 
-    async def fake_gen(sections, recent_insights, config):
+    async def fake_gen(sections, config):
         captured["sections"] = sections
         return "insights md", None
 
     with patch(
-        "src.sections.insights.section.load_recent_section_titles", return_value=""
-    ), patch(
         "src.llm.generate_trend_insights",
         new=AsyncMock(side_effect=fake_gen),
     ):
-        md, err = await run_insights_section("", "gh md", "", cfg, now=None)
+        md, meta, err = await run_insights_section("", "gh md", "", cfg, now=None)
 
     assert md == "insights md"
+    assert err is None
+    # metadata 由 parse_insights_with_metadata 注入默认标题/profile
+    assert meta["profile"] == "morning"
+    assert "📰 AI Daily 每日精选" in meta["title"]
     assert captured["sections"]["rss"] == "(本次无内容)"
     assert captured["sections"]["github"] == "gh md"
     assert captured["sections"]["hackernews"] == "(本次无内容)"

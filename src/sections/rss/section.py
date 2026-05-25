@@ -6,7 +6,7 @@
 from datetime import datetime
 from typing import Dict, Optional, Tuple
 
-from src.llm import compose_digest
+from src.llm import compose_digest, parse_digest_with_metadata
 from src.storage import (
     extract_push_time,
     get_last_push_file,
@@ -16,13 +16,15 @@ from src.storage import (
 
 async def run_rss_section(
     config: Dict, now: Optional[datetime] = None
-) -> Tuple[str, Optional[str]]:
+) -> Tuple[str, Optional[Dict], Optional[str]]:
     """生成 RSS digest markdown 段(不含 sentinel)。
 
     返回:
-        (markdown, error)
-        - 无新内容时返回 ("", None)
-        - compose_digest 失败时返回 ("", error_message)
+        (markdown_body, metadata, error)
+        - 无新内容时返回 ("", None, None)
+        - compose_digest 失败时返回 ("", None, error_message)
+        - metadata 字段:title / lead / highlights / profile=default / date
+          早报场景下调用方可丢弃 metadata(由 insights 段覆盖)
     """
     # 延迟 import 避免循环:Task 20-21 后 main.py 会反向 import run_rss_section
     from src.main import collect_entries_for_push
@@ -41,15 +43,20 @@ async def run_rss_section(
 
     if not to_push:
         print("ℹ️ RSS: 无新消息")
-        return "", None
+        return "", None, None
 
     push_context_days = config["filter"].get("push_context_days", 5)
     recent = load_recent_push_titles(push_context_days)
 
     try:
-        md = await compose_digest(to_push, context, config["llm"], recent_push_context=recent)
-        return md, None
+        raw = await compose_digest(
+            to_push, context, config["llm"], recent_push_context=recent
+        )
     except Exception as e:
         msg = f"compose_digest 失败: {e}"
         print(f"⚠️ RSS: {msg}")
-        return "", msg
+        return "", None, msg
+
+    date_str = (now or datetime.now()).strftime("%Y-%m-%d")
+    body, metadata = parse_digest_with_metadata(raw or "", date_str)
+    return body, metadata, None

@@ -35,7 +35,9 @@ def load_prompt(prompt_path: str, **kwargs) -> str:
     return template
 
 
-async def call_llm(prompt: str, config: Dict) -> str:
+async def call_llm(
+    prompt: str, config: Dict, response_format: Optional[Dict] = None
+) -> str:
     """调用LLM API - 统一使用OpenAI兼容接口"""
     model = config.get("model", "gpt-4o-mini")
     base_url = config.get("baseUrl", "https://api.openai.com/v1")
@@ -57,6 +59,8 @@ async def call_llm(prompt: str, config: Dict) -> str:
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
     }
+    if response_format is not None:
+        payload["response_format"] = response_format
 
     url = f"{base_url}/chat/completions"
 
@@ -143,10 +147,56 @@ def _parse_llm_json_response(response: str) -> List[Dict]:
         try:
             return json.loads(match.group())
         except json.JSONDecodeError:
-            print("⚠️ 从文本中提取JSON数组失败:",text)
+            print("⚠️ 从文本中提取JSON数组失败:", text)
             pass
 
     raise ValueError(f"无法从响应中解析JSON: {response[:200]}...")
+
+
+def _parse_score_response(response: str) -> List[Dict]:
+    """解析评分LLM响应。
+
+    json_object 模式下应返回 {"items": [...]} 形式的对象;
+    兼容直接数组与 markdown 包裹作为兜底路径。
+    """
+    text = response.strip()
+
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    text = text.strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for pattern in (r"\{.*\}", r"\[.*\]"):
+            match = re.search(pattern, text, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group())
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+    if parsed is None:
+        raise ValueError(f"无法从响应中解析JSON: {response[:200]}...")
+
+    if isinstance(parsed, list):
+        return parsed
+
+    if isinstance(parsed, dict):
+        for key in ("items", "results", "data", "scores"):
+            if isinstance(parsed.get(key), list):
+                return parsed[key]
+        list_values = [v for v in parsed.values() if isinstance(v, list)]
+        if len(list_values) == 1:
+            return list_values[0]
+
+    raise ValueError(f"无法从响应中提取评分数组: {response[:200]}...")
 
 
 def _split_entries_for_batch(
@@ -200,25 +250,34 @@ def _reconcile_batch_results(
     """对单批评分结果按 link 过滤，保留可回收结果"""
     entry_links = {entry.get("link") for entry in entries if entry.get("link")}
     matched_results = []
+    result_links = set()
 
     for item in results:
         if not isinstance(item, dict):
             continue
 
         link = item.get("link")
-        if link and link in entry_links:
-            matched_results.append(item)
+        if link:
+            result_links.add(link)
+            if link in entry_links:
+                matched_results.append(item)
 
     errors = []
     if len(results) != len(entries) or len(matched_results) != len(entries):
-        errors.append(
-            "批次{batch} 评分结果异常: 输入{input_count}, 返回{output_count}, 匹配{matched_count}".format(
-                batch=batch_index + 1,
-                input_count=len(entries),
-                output_count=len(results),
-                matched_count=len(matched_results),
-            )
+        missing_links = sorted(entry_links - result_links)
+        error_message = (
+            "批次{batch} 评分结果异常: 输入{input_count}, 返回{output_count}, "
+            "匹配{matched_count}, 未评分链接({missing_count}): {missing}"
+        ).format(
+            batch=batch_index + 1,
+            input_count=len(entries),
+            output_count=len(results),
+            matched_count=len(matched_results),
+            missing_count=len(missing_links),
+            missing=missing_links,
         )
+        print(f"⚠️ {error_message}")
+        errors.append(error_message)
 
     return matched_results, errors
 
@@ -232,8 +291,10 @@ async def _score_single_batch(
     prompt = _build_batch_prompt(entries, prompt_path)
 
     try:
-        response = await call_llm(prompt, config)
-        results = _parse_llm_json_response(response)
+        response = await call_llm(
+            prompt, config, response_format={"type": "json_object"}
+        )
+        results = _parse_score_response(response)
 
         if not isinstance(results, list):
             raise ValueError(f"LLM返回的不是数组: {type(results)}")
@@ -486,16 +547,15 @@ async def summarize_hackernews(
 
 
 async def generate_trend_insights(
-    sections: Dict[str, str], recent_insights: str, config: Dict
+    sections: Dict[str, str], config: Dict
 ) -> Tuple[str, Optional[str]]:
-    """输入三段成品 + 近期 insights 标题清单,返回洞察段 markdown。"""
+    """输入三段成品,返回洞察段 markdown(含 frontmatter)。"""
     prompt_path = config.get("prompts", {}).get("insights", "prompts/insights.md")
     prompt = load_prompt(
         prompt_path,
         rss=sections.get("rss", ""),
         github=sections.get("github", ""),
         hackernews=sections.get("hackernews", ""),
-        recent_insights=recent_insights or "",
     )
     try:
         return await call_llm(prompt, config), None
@@ -503,3 +563,109 @@ async def generate_trend_insights(
         msg = f"generate_trend_insights 失败: {e}"
         print(f"⚠️ {msg}")
         return "", msg
+
+
+def _parse_frontmatter(text: str) -> Tuple[Dict, str]:
+    """从 LLM 输出中分离 YAML frontmatter 与正文。
+
+    返回 (metadata_dict, body)。无 frontmatter 时返回 ({}, 原文)。
+    YAML 解析失败时也返回 ({}, 原文) —— 保证降级路径不丢内容。
+    """
+    import yaml
+
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text.strip(), re.DOTALL)
+    if not match:
+        print("无法匹配 frontmatter 数据段")
+        return {}, text
+
+    try:
+        meta = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError:
+        print("frontmatter 数据段解析失败")
+        return {}, text
+
+    if not isinstance(meta, dict):
+        return {}, text
+
+    return meta, match.group(2).strip()
+
+
+def parse_insights_with_metadata(llm_output: str, date: str) -> Tuple[str, Dict]:
+    """解析 insights LLM 输出,返回 (insights_md, metadata)。
+
+    metadata 字段:title / excerpt / seotitle / seodescription / lead / highlights /
+    profile / date。缺失字段补默认值。
+    """
+    meta, body = _parse_frontmatter(llm_output)
+    insights_md = body if meta else llm_output
+
+    metadata = {
+        "title": meta.get("title") or f"📰 AI Daily 每日精选 | {date}",
+        "excerpt": meta.get("excerpt", ""),
+        "seotitle": meta.get("seotitle", ""),
+        "seodescription": meta.get("seodescription", ""),
+        "lead": meta.get("lead", ""),
+        "highlights": _normalize_highlights(meta.get("highlights")),
+        "profile": "morning",
+        "date": date,
+    }
+    return insights_md, metadata
+
+
+def parse_digest_with_metadata(llm_output: str, date: str) -> Tuple[str, Dict]:
+    """解析 digest LLM 输出,返回 (digest_md, metadata)。
+
+    metadata 字段:title / lead / highlights / profile / date。
+    无 frontmatter 时回退到 "🌙 AI Daily 晚报 | {date}" 标题。
+    """
+    meta, body = _parse_frontmatter(llm_output)
+    digest_md = body if meta else llm_output
+
+    metadata = {
+        "title": meta.get("title") or f"🌙 AI Daily 晚报 | {date}",
+        "lead": meta.get("lead", ""),
+        "highlights": _normalize_highlights(meta.get("highlights")),
+        "profile": "default",
+        "date": date,
+    }
+    return digest_md, metadata
+
+
+def parse_immediate_push_with_metadata(
+    llm_output: str, default_title: str
+) -> Tuple[str, Dict]:
+    """解析即时推送 LLM 输出,返回 (body, metadata)。
+
+    metadata 仅含 title / profile。无 frontmatter 时降级到旧式 `# ` 标题提取,
+    再降级到 default_title。
+    """
+    meta, body = _parse_frontmatter(llm_output)
+
+    if meta and meta.get("title"):
+        return body, {"title": meta["title"], "profile": "hotspot"}
+
+    # 兼容旧格式:从正文一级标题提取
+    match = re.search(r"^\s*#\s+(.+?)\s*\n(.*)$", llm_output, re.DOTALL | re.MULTILINE)
+    if match:
+        return match.group(2).rstrip(), {
+            "title": match.group(1).strip(),
+            "profile": "hotspot",
+        }
+
+    return llm_output, {"title": default_title, "profile": "hotspot"}
+
+
+def _normalize_highlights(value) -> List[str]:
+    """将 LLM 输出的 highlights 规整为字符串列表(过滤空项)。
+
+    LLM 偶发偏差兜底:单字符串/null/列表夹空项 → 统一规整。不做数量截断。
+    """
+    if not value:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, list):
+        items = value
+    else:
+        return []
+    return [str(x).strip() for x in items if str(x).strip()]

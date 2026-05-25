@@ -10,6 +10,9 @@
 - [ ] 添加更多信息源，如 TechCrunch、GitHub Trending
 - [ ] x 新增加用户rss源创建： DAIR.AI
 - [ ] 允许fetch链接中的内容对信息进行扩展
+- [ ] llm api fallback
+- [ ] 当前只获取title不够消息去重
+- [ ] 更多信息源： https://www.anthropic.com/research/glasswing-initial-update
 
 
 长期待办
@@ -31,8 +34,20 @@
 | 状态追踪 | 文件时间戳 | 无需外部数据库 |
 | RSS延迟防护 | fetch_lookback_minutes | 防止RSS延迟导致漏读 |
 | LLM异常通知 | 调用方统一上报 | 避免批次级刷屏，同时保留关键异常通知 |
+| 报告 metadata 统一 | 全部从 LLM frontmatter 解析(早报/晚报/即时) | 取代之前的 `extract_title_from_content` h1 提取+硬编日期标题；个性化标题 + lead 导读 + highlights 列表统一承载 |
 
 ## 开发进度
+
+**2026-05-22**
+
+- ✅ 推送 metadata 统一改造：晚报与即时消息也走 frontmatter（之前只有早报）
+  - `prompts/digest.md` 增加 frontmatter（title/lead/highlights），删除正文「开头一句话定调」段
+  - `prompts/insights.md` frontmatter 增加 `lead`（综合三段的 60-100 字前言）与 `highlights`（2-3 条卡片重点）
+  - `prompts/immediate_push.md` 将 `# 标题` 迁到 frontmatter `title` 字段
+  - `src/llm.py` 新增 `parse_digest_with_metadata` / `parse_immediate_push_with_metadata`，统一 `_parse_frontmatter` 帮手；移除 `extract_title_from_content`
+  - `src/sections/rss/section.py` 返回三元组 `(body, metadata, err)`；早报丢弃 digest metadata，由 insights 段覆盖
+  - 晚报现在拥有个性化标题 + lead + highlights，与早报对齐
+
 
 **2026-05-17**
 
