@@ -12,7 +12,7 @@
     "fetch_lookback_minutes": 120,
     "push_cron": [
       "0 8 * * *",
-      "0 17 * * *"
+      "15 18 * * *"
     ],
     "timezone_hours": 8
   },
@@ -32,24 +32,23 @@
       "domain": {
         "activity_domains": [
           "AI",
-          "投资"
+          "Investment"
         ],
         "domains": [
           {
             "key": "AI",
-            "score_standard": "prompts/domains/AI.md",
-            "digest": "prompts/digest.md"
+            "score_standard": "prompts/score/ai/score_standard.md",
+            "digest": "prompts/digest/ai/digest.md"
           },
           {
-            "key": "投资",
-            "score_standard": "prompts/domains/investment.md",
-            "digest": "prompts/digest_investment.md"
+            "key": "Investment",
+            "score_standard": "prompts/score/investment/score_standard.md",
+            "digest": "prompts/digest/investment/digest.md"
           }
         ]
       },
-      "score_batch": "prompts/score_batch.md",
-      "immediate_push": "prompts/immediate_push.md",
-      "digest": "prompts/digest.md"
+      "score_batch": "prompts/score/score_batch.md",
+      "immediate_push": "prompts/immediate_push.md"
     }
   },
   "push": {

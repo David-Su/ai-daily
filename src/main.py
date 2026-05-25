@@ -369,6 +369,7 @@ async def run_push_job(config: Dict):
             continue
 
         await send_to_platforms(push_content, config["push"], title=f"{domain} 资讯汇总")
+        await asyncio.sleep(1)
 
         push_file = get_push_file(domain=domain)
         save_push_file(

@@ -116,6 +116,8 @@ def _build_batch_prompt(
 
     # 构建评分标准
     score_standard = _build_score_standard(config)
+    # 构建领域列表
+    domain_list = _build_domain_list(config)
 
     # 构建entries JSON列表（只包含必要字段）
     entries_for_llm = [
@@ -139,8 +141,13 @@ def _build_batch_prompt(
         prompt_path,
         entries_json=entries_json,
         score_standard=score_standard,
+        domain_list=domain_list,
     )
 
+def _build_domain_list(config: Dict):
+    domain_config = config.get("prompts", {}).get("domain", {})
+    active_domains = domain_config.get("activity_domains", [])
+    return json.dumps(active_domains, ensure_ascii=False, indent=2)
 
 def _build_score_standard(config: Dict) -> str:
     """Build enabled domain score standards from prompt files."""
@@ -170,7 +177,7 @@ def _get_domain_prompt_path(config: Dict, domain: str) -> Optional[str]:
         if domain_item.get("key") == domain_name and domain_item.get("digest"):
             return domain_item["digest"]
 
-    return prompts.get("digest")
+    return None
 
 
 def _parse_llm_json_response(response: str) -> List[Dict]:
