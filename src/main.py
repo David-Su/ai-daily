@@ -59,6 +59,7 @@ async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
     lines.extend(f"- {error}" for error in errors)
 
     try:
+        print(f"⚠️ LLM异常 推送到平台")
         await send_to_platforms("\n".join(lines), config["push"])
     except Exception as e:
         print(f"⚠️ LLM异常通知发送失败: {e}")
@@ -153,6 +154,7 @@ def collect_entries_for_domain_pushes(
     qualified_entries = [e for e in all_entries if (e.get("score") or 0) >= min_score]
     print(f"📋 过滤后条目: {len(qualified_entries)} 条 ")
 
+    # 获取{domain:domain对应的entries}
     grouped_entries: Dict[str, List[Dict]] = {}
     for entry in qualified_entries:
         domain = normalize_entry_domain(entry)
@@ -369,7 +371,6 @@ async def run_push_job(config: Dict):
             continue
 
         await send_to_platforms(push_content, config["push"], title=f"{domain} 资讯汇总")
-        await asyncio.sleep(1)
 
         push_file = get_push_file(domain=domain)
         save_push_file(
