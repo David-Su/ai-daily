@@ -32,23 +32,29 @@ def get_push_file(
     return str(Path(data_dir) / "push" / domain_dir / filename)
 
 
-def get_notify_file(d: date = None, data_dir: str = "news-data") -> str:
+def get_notify_file(
+    d: date = None, data_dir: str = "news-data", domain: str = None
+) -> str:
     """获取notify文件路径 (使用配置时区)"""
     if d is None:
         d = datetime.now(get_timezone()).date()
-    return f"{data_dir}/notify-{d.isoformat()}.md"
+    filename = f"notify-{d.isoformat()}.md"
+    if not domain:
+        return str(Path(data_dir) / filename)
+    return str(Path(data_dir) / "notify" / domain / filename)
 
 
-def save_notify_file(filepath: str, content: str):
+def save_notify_file(filepath: str, content: str, domain: str = None):
     """保存即时推送文件（Markdown格式），同一天的内容追加到同一文件"""
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     notify_time = datetime.now(get_timezone()).isoformat()
+    domain_line = f'domain: "{domain}"\n' if domain else ""
 
     new_content = f"""---
 pushTime: "{notify_time}"
----
+{domain_line}---
 
 {content}
 
@@ -141,7 +147,7 @@ def _push_file_sort_key(filepath: Path):
 
 
 def load_recent_notify_titles(
-    context_days: int = 3, data_dir: str = "news-data"
+    context_days: int = 3, data_dir: str = "news-data", domain: str = None
 ) -> str:
     """加载最近 context_days 天 notify 文件的事件标题清单（仅供 LLM 查重）
 
@@ -158,20 +164,21 @@ def load_recent_notify_titles(
     loaded_files = []
     for i in range(context_days):
         d = today - timedelta(days=i)
-        notify_file = data_path / f"notify-{d.isoformat()}.md"
+        notify_file = Path(get_notify_file(d, str(data_path), domain=domain))
         if not notify_file.exists() or notify_file.stat().st_size == 0:
             continue
         try:
             with open(notify_file, "r", encoding="utf-8") as f:
                 items.extend(_extract_notify_titles(f.read()))
-                loaded_files.append(notify_file.name)
+                loaded_files.append(str(notify_file.relative_to(data_path)))
         except Exception as e:
             print(f"⚠️ 解析 notify 文件失败: {notify_file} | {type(e).__name__}: {e}")
             continue
 
     if loaded_files:
+        scope = f" domain={domain}" if domain else ""
         print(
-            f"   📂 已加载 {len(loaded_files)} 个 notify 文件 (titles): {', '.join(loaded_files)}"
+            f"   📂 已加载 {len(loaded_files)} 个 notify 文件 (titles{scope}): {', '.join(loaded_files)}"
         )
 
     return "\n".join(f"- [{t}] {title}" if t else f"- {title}" for t, title in items)
@@ -492,6 +499,7 @@ def cleanup_old_files(days: int = 7, data_dir: str = "news-data"):
         "fetch-*.json",
         "fetch-*.md",
         "push/*/*.md",
+        "notify/*/*.md",
         "notify-*.md",
     ]:
         for file in data_path.glob(pattern):

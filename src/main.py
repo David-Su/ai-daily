@@ -265,42 +265,58 @@ async def run_fetch_job(config: Dict):
     no_content_marker = config["filter"].get("no_content_marker", "[NO_NEW_CONTENT]")
     hot_entries = [e for e in scored if (e.get("score") or 0) >= hot_threshold]
     if hot_entries:
-        print(f"🔥 发现 {len(hot_entries)} 条热点消息，即时推送...")
+        hot_entries_by_domain: Dict[str, List[Dict]] = {}
+        for entry in hot_entries:
+            domain = normalize_entry_domain(entry)
+            hot_entries_by_domain.setdefault(domain, []).append(entry)
+
+        print(
+            f"🔥 发现 {len(hot_entries)} 条热点消息，按 {len(hot_entries_by_domain)} 个 domain 即时推送..."
+        )
 
         # 加载近期已推送事件清单（仅供 LLM 查重，避免风格趋同）
         context_days = config["filter"]["context_days"]
-        recent_notify = load_recent_notify_titles(context_days)
-        recent_push = load_recent_push_titles(context_days)
-        recent_context = (
-            f"=== 近期即时推送事件 ===\n{recent_notify}\n\n"
-            f"=== 近期汇总推送事件 ===\n{recent_push}"
-        )
 
-        push_content, immediate_push_error = await generate_immediate_push(
-            hot_entries, config["llm"], recent_push_context=recent_context
-        )
+        for domain in sort_domains(list(hot_entries_by_domain.keys()), config):
+            domain_hot_entries = hot_entries_by_domain[domain]
+            print(f"🤖 [{domain}] 生成即时快讯 | 热点: {len(domain_hot_entries)} 条")
 
-        if immediate_push_error:
-            await notify_llm_errors(
-                "generate_immediate_push", [immediate_push_error], config
+            recent_notify = load_recent_notify_titles(context_days, domain=domain)
+            recent_push = load_recent_push_titles(context_days, domain=domain)
+            recent_context = (
+                f"=== 近期即时推送事件 ===\n{recent_notify}\n\n"
+                f"=== 近期汇总推送事件 ===\n{recent_push}"
             )
 
-        if not push_content:
-            print("⚠️ 即时推送内容生成失败，跳过本次热点推送")
-            print(
-                f"✅ Fetch Job 完成 | 新消息: {len(scored)} 条 | 热点: {len(hot_entries)} 条"
+            push_content, immediate_push_error = await generate_immediate_push(
+                domain_hot_entries,
+                config["llm"],
+                recent_push_context=recent_context,
+                domain=domain,
             )
-            return
 
-        # 检查是否有实际内容需要推送
-        if no_content_marker in push_content:
-            print(f"ℹ️ 无新内容需要推送 (LLM判定为重复内容)")
-        else:
-            await send_to_platforms(push_content, config["push"])
-            # 保存即时推送内容到notify文件
-            notify_file = get_notify_file()
-            save_notify_file(notify_file, push_content)
-            print(f"💾 已保存即时推送到 {notify_file}")
+            if immediate_push_error:
+                await notify_llm_errors(
+                    f"generate_immediate_push:{domain}",
+                    [immediate_push_error],
+                    config,
+                )
+
+            if not push_content:
+                print(f"⚠️ [{domain}] 即时推送内容生成失败，跳过本组热点推送")
+                continue
+
+            # 检查是否有实际内容需要推送
+            if no_content_marker in push_content:
+                print(f"ℹ️ [{domain}] 无新内容需要推送 (LLM判定为重复内容)")
+            else:
+                await send_to_platforms(
+                    push_content, config["push"], title=f"{domain} 即时快讯"
+                )
+                # 保存即时推送内容到notify文件
+                notify_file = get_notify_file(domain=domain)
+                save_notify_file(notify_file, push_content, domain=domain)
+                print(f"💾 [{domain}] 已保存即时推送到 {notify_file}")
 
     print(f"✅ Fetch Job 完成 | 新消息: {len(scored)} 条 | 热点: {len(hot_entries)} 条")
 

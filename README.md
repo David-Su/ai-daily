@@ -81,17 +81,18 @@ GMAIL_TO=receiver@example.com
           {
             "key": "AI",
             "score_standard": "prompts/score/ai/score_standard.md",
-            "digest": "prompts/digest/ai/digest.md"
+            "digest": "prompts/digest/ai/digest.md",
+            "immediate_push": "prompts/immediate/ai/immediate_push.md"
           },
           {
             "key": "Investment",
             "score_standard": "prompts/score/investment/score_standard.md",
-            "digest": "prompts/digest/investment/digest.md"
+            "digest": "prompts/digest/investment/digest.md",
+            "immediate_push": "prompts/immediate/investment/immediate_push.md"
           }
         ]
       },
-      "score_batch": "prompts/score/score_batch.md",
-      "immediate_push": "prompts/immediate_push.md"
+      "score_batch": "prompts/score/score_batch.md"
     }
   },
   "push": {
@@ -187,9 +188,8 @@ cron 格式：`minute hour day month weekday`。
 | `max_concurrent_batches` | number | 批量评分最大并发批次数 |
 | `max_retries` | number | LLM 请求失败后的最大重试次数 |
 | `prompts.score_batch` | string | 批量评分 prompt 路径 |
-| `prompts.immediate_push` | string | 即时推送 prompt 路径 |
 | `prompts.domain.activity_domains` | array | 当前启用的领域列表 |
-| `prompts.domain.domains[]` | array | 每个领域的评分标准和汇总 prompt 配置 |
+| `prompts.domain.domains[]` | array | 每个领域的评分标准、汇总和即时推送 prompt 配置 |
 
 ### push - 推送平台配置
 
@@ -223,7 +223,7 @@ flowchart TD
     D --> F{"score >= hot_threshold?"}
     F -->|是| G["生成即时快讯"]
     G --> H["推送到启用平台"]
-    G --> I["news-data/notify-*.md"]
+    G --> I["news-data/notify/<domain>/notify-*.md"]
     E --> J["Push Loop"]
     J --> K["按 domain 收集高分条目"]
     K --> L["加载历史标题查重"]
@@ -256,9 +256,9 @@ flowchart TD
 }
 ```
 
-### `news-data/notify-*.md`
+### `news-data/notify/<domain>/notify-*.md`
 
-即时推送按天追加保存，每个推送块包含 `pushTime` frontmatter，并用 `------` 分隔。
+即时推送按 domain 和日期追加保存，每个推送块包含 `pushTime` 与 `domain` frontmatter，并用 `------` 分隔。
 
 ### `news-data/push/<domain>/push-*.md`
 
@@ -313,8 +313,9 @@ DEBUG_DOMAIN = "AI"
 
 1. 在 `prompts/score/<domain>/score_standard.md` 写评分标准。
 2. 在 `prompts/digest/<domain>/digest.md` 写该领域的汇总 prompt。
-3. 在 `config.json` 的 `llm.prompts.domain.domains` 增加 `{key, score_standard, digest}`。
-4. 把 `key` 加入 `llm.prompts.domain.activity_domains`。
+3. 在 `prompts/immediate/<domain>/immediate_push.md` 写该领域的即时推送 prompt。
+4. 在 `config.json` 的 `llm.prompts.domain.domains` 增加 `{key, score_standard, digest, immediate_push}`。
+5. 把 `key` 加入 `llm.prompts.domain.activity_domains`。
 
 ### 添加新的推送平台
 
@@ -376,7 +377,9 @@ ai-daily/
 │       ├── feishu.py
 │       └── gmail.py
 ├── prompts/
-│   ├── immediate_push.md
+│   ├── immediate/
+│   │   ├── ai/immediate_push.md
+│   │   └── investment/immediate_push.md
 │   ├── score/
 │   │   ├── score_batch.md
 │   │   ├── ai/score_standard.md

@@ -12,12 +12,18 @@ load_dotenv(ROOT / ".env")
 
 from src.config import get_timezone, load_config, merge_sources
 from src.fetcher import fetch_all_feeds
-from src.llm import compose_digest, score_batch
+from src.llm import compose_digest, generate_immediate_push, score_batch
 from src.main import collect_entries_for_domain_pushes
 from src.processor import html_to_markdown
 from src.push import send_to_platforms
 from src.push.gmail import GmailPlatform
-from src.storage import get_fetch_file, save_fetch_file
+from src.storage import (
+    get_fetch_file,
+    get_notify_file,
+    load_recent_notify_titles,
+    save_fetch_file,
+    save_notify_file,
+)
 
 
 # 调试开关：需要访问真实 RSS、LLM 或推送服务时，直接把对应值改成 True。
@@ -83,12 +89,12 @@ def test_config_interface_and_prompt_files():
 
     prompts = config["llm"]["prompts"]
     assert Path(prompts["score_batch"]).exists()
-    assert Path(prompts["immediate_push"]).exists()
 
     domains = {item["key"]: item for item in prompts["domain"]["domains"]}
     for domain in prompts["domain"]["activity_domains"]:
         assert Path(domains[domain]["score_standard"]).exists()
         assert Path(domains[domain]["digest"]).exists()
+        assert Path(domains[domain]["immediate_push"]).exists()
 
 
 def test_sources_merge_and_html_processing():
@@ -178,6 +184,66 @@ async def test_digest_step_with_fake_llm(monkeypatch):
     )
 
     assert content.startswith("# Digest")
+
+
+@pytest.mark.asyncio
+async def test_immediate_push_uses_domain_prompt(monkeypatch):
+    """确认即时推送会使用 domain 专属 prompt。"""
+    import src.llm as llm_module
+
+    config = _config()
+    domains = {
+        item["key"]: item for item in config["llm"]["prompts"]["domain"]["domains"]
+    }
+    domain = "Investment" if "Investment" in domains else _domain(config)
+    entries = _sample_entries(domain)
+    entries[0]["score"] = 95
+
+    async def fake_call_llm(prompt, llm_config):
+        assert entries[0]["title"] in prompt
+        assert "recent item" in prompt
+        if domain == "Investment":
+            assert "不构成投资建议" in prompt
+        return "# Immediate\n\n- Ready"
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
+
+    content, error = await generate_immediate_push(
+        [entries[0]],
+        config["llm"],
+        recent_push_context="- recent item",
+        domain=domain,
+    )
+
+    assert error is None
+    assert content.startswith("# Immediate")
+
+
+def test_notify_titles_are_scoped_by_domain(tmp_path):
+    """即时推送历史按 domain 读写，避免 AI 和 Investment 查重上下文混在一起。"""
+    ai_file = get_notify_file(data_dir=str(tmp_path), domain="AI")
+    investment_file = get_notify_file(data_dir=str(tmp_path), domain="Investment")
+
+    save_notify_file(
+        ai_file,
+        "# 🚨 AI Daily 快讯 | 2026-05-26\n\n## 🔥 AI model release",
+        domain="AI",
+    )
+    save_notify_file(
+        investment_file,
+        "# 🚨 AI Daily 投资快讯 | 2026-05-26\n\n## 🔥 Earnings surprise",
+        domain="Investment",
+    )
+
+    ai_titles = load_recent_notify_titles(1, data_dir=str(tmp_path), domain="AI")
+    investment_titles = load_recent_notify_titles(
+        1, data_dir=str(tmp_path), domain="Investment"
+    )
+
+    assert "AI model release" in ai_titles
+    assert "Earnings surprise" not in ai_titles
+    assert "Earnings surprise" in investment_titles
+    assert "AI model release" not in investment_titles
 
 
 def test_storage_and_push_candidate_selection(tmp_path):

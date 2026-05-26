@@ -33,7 +33,7 @@ AI Daily 使用两个长期运行的异步循环：
                  ┌─────────────────────┐
                  │ news-data/          │
                  │ fetch-*.json        │
-                 │ notify-*.md         │
+                 │ notify/<domain>/*.md│
                  │ push/<domain>/*.md  │
                  └─────────────────────┘
 ```
@@ -50,7 +50,7 @@ flowchart LR
     E --> G{"score >= hot_threshold"}
     G -->|yes| H["generate_immediate_push"]
     H --> I["send_to_platforms"]
-    H --> J["notify-*.md"]
+    H --> J["notify/<domain>/notify-*.md"]
     F --> K["collect_entries_for_domain_pushes"]
     K --> L["compose_digest(domain)"]
     L --> I
@@ -84,7 +84,7 @@ await asyncio.gather(fetch_loop(config), push_loop(config))
 4. 基于近期已保存链接去重。
 5. 调用 `score_batch()` 分领域批量评分。
 6. 保存到 `news-data/fetch-YYYY-MM-DD.json`。
-7. 对达到 `hot_threshold` 的条目生成即时快讯，推送并追加到 `notify-YYYY-MM-DD.md`。
+7. 对达到 `hot_threshold` 的条目按 domain 生成即时快讯，推送并追加到 `notify/<domain>/notify-YYYY-MM-DD.md`。
 
 `run_push_job(config)`：
 
@@ -168,7 +168,8 @@ payload = {
 
 `generate_immediate_push()`：
 
-- 使用 `prompts.immediate_push`。
+- 必须传入 `domain`。
+- 通过 `llm.prompts.domain.domains[].immediate_push` 查找 domain 专属即时推送 prompt。
 - 传入本次热点条目和近期 notify/push 标题。
 - 失败时返回空内容和错误信息，由调用方告警并跳过本次即时推送。
 
@@ -186,7 +187,7 @@ payload = {
 | 文件 | 说明 |
 |------|------|
 | `news-data/fetch-YYYY-MM-DD.json` | 当天抓取和评分结果 |
-| `news-data/notify-YYYY-MM-DD.md` | 当天即时推送内容，按块追加 |
+| `news-data/notify/<domain>/notify-YYYY-MM-DD.md` | 当天即时推送内容，按 domain 分目录并按块追加 |
 | `news-data/push/<domain>/push-YYYY-MM-DD-HH-MM-SS.md` | 定时汇总推送归档 |
 
 `fetch-*.json` 格式：
@@ -225,7 +226,7 @@ totalEntries: 8
 去重与上下文：
 
 - `load_existing_links()` 在跨天边界会读取昨天和今天的 fetch 文件，降低重复抓取。
-- `load_recent_notify_titles()` 只提取即时推送标题供 LLM 查重。
+- `load_recent_notify_titles()` 按 domain 只提取即时推送标题供 LLM 查重。
 - `load_recent_push_titles()` 只提取历史汇总标题供 LLM 查重。
 - 传给 LLM 的历史推送上下文是标题清单，不把完整成品文案传回去模仿。
 
@@ -288,17 +289,18 @@ platforms = {
           {
             "key": "AI",
             "score_standard": "prompts/score/ai/score_standard.md",
-            "digest": "prompts/digest/ai/digest.md"
+            "digest": "prompts/digest/ai/digest.md",
+            "immediate_push": "prompts/immediate/ai/immediate_push.md"
           },
           {
             "key": "Investment",
             "score_standard": "prompts/score/investment/score_standard.md",
-            "digest": "prompts/digest/investment/digest.md"
+            "digest": "prompts/digest/investment/digest.md",
+            "immediate_push": "prompts/immediate/investment/immediate_push.md"
           }
         ]
       },
-      "score_batch": "prompts/score/score_batch.md",
-      "immediate_push": "prompts/immediate_push.md"
+      "score_batch": "prompts/score/score_batch.md"
     }
   },
   "push": {
@@ -350,7 +352,9 @@ ai-daily/
 │       ├── feishu.py
 │       └── gmail.py
 ├── prompts/
-│   ├── immediate_push.md
+│   ├── immediate/
+│   │   ├── ai/immediate_push.md
+│   │   └── investment/immediate_push.md
 │   ├── score/
 │   │   ├── score_batch.md
 │   │   ├── ai/score_standard.md
@@ -364,7 +368,7 @@ ai-daily/
 │   └── rss.opml
 ├── news-data/
 │   ├── fetch-*.json
-│   ├── notify-*.md
+│   ├── notify/<domain>/notify-*.md
 │   └── push/<domain>/push-*.md
 ├── config.json
 ├── requirements.txt
@@ -385,8 +389,9 @@ ai-daily/
 
 1. 新增评分标准文件，例如 `prompts/score/<domain>/score_standard.md`。
 2. 新增摘要 prompt，例如 `prompts/digest/<domain>/digest.md`。
-3. 在 `config.json` 的 `llm.prompts.domain.domains` 中添加配置。
-4. 在 `llm.prompts.domain.activity_domains` 中启用该 domain。
+3. 新增即时推送 prompt，例如 `prompts/immediate/<domain>/immediate_push.md`。
+4. 在 `config.json` 的 `llm.prompts.domain.domains` 中添加配置。
+5. 在 `llm.prompts.domain.activity_domains` 中启用该 domain。
 
 ### 添加新源
 

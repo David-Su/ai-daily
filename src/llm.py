@@ -171,17 +171,19 @@ def _build_score_standard(config: Dict) -> str:
     return "\n".join(standards)
 
 
-def _get_domain_prompt_path(config: Dict, domain: str) -> Optional[str]:
-    """按 domain 选择 digest 提示词路径，未配置时回退到全局提示词。"""
+def _get_domain_prompt_path(
+    config: Dict, domain: str, prompt_key: str
+) -> Optional[str]:
+    """按 domain 选择提示词路径，未配置时回退到全局提示词。"""
     prompts = config.get("prompts", {})
     domain_name = (domain or "").strip()
 
     domain_config = prompts.get("domain", {})
     for domain_item in domain_config.get("domains", []):
-        if domain_item.get("key") == domain_name and domain_item.get("digest"):
-            return domain_item["digest"]
+        if domain_item.get("key") == domain_name and domain_item.get(prompt_key):
+            return domain_item[prompt_key]
 
-    return None
+    return prompts.get(prompt_key)
 
 
 def _parse_llm_json_response(response: str) -> List[Dict]:
@@ -400,7 +402,10 @@ def _merge_scores(entries: List[Dict], scores: List[Dict]) -> List[Dict]:
 
 
 async def generate_immediate_push(
-    entries: List[Dict], config: Dict, recent_push_context: str = ""
+    entries: List[Dict],
+    config: Dict,
+    recent_push_context: str = "",
+    domain: str = None,
 ) -> Tuple[str, Optional[str]]:
     """生成即时推送内容
 
@@ -408,20 +413,21 @@ async def generate_immediate_push(
         entries: 原始entries列表（调用方已筛选好高分条目）
         config: LLM配置
         recent_push_context: 近期推送上下文，用于去重
+        domain: 当前快讯所属 domain，用于选择 domain 专属即时推送 prompt
     """
-    prompt_path = config.get("prompts", {}).get(
-        "immediate_push", "prompts/immediate_push.txt"
-    )
-
-    # 直接使用传入的entries，转为JSON格式传给prompt
-    prompt = load_prompt(
-        prompt_path,
-        count=len(entries),
-        entries=json.dumps(entries, ensure_ascii=False, indent=2),
-        recent_push_context=recent_push_context,
-    )
-
     try:
+        prompt_path = _get_domain_prompt_path(config, domain, "immediate_push")
+        if not prompt_path:
+            raise ValueError(f"未配置 domain={domain or ''} 的 immediate_push prompt")
+
+        # 直接使用传入的entries，转为JSON格式传给prompt
+        prompt = load_prompt(
+            prompt_path,
+            count=len(entries),
+            entries=json.dumps(entries, ensure_ascii=False, indent=2),
+            recent_push_context=recent_push_context,
+        )
+
         return await call_llm(prompt, config), None
     except Exception as e:
         error_message = f"生成即时推送失败: {e}"
@@ -445,7 +451,7 @@ async def compose_digest(
         recent_push_context: 近期汇总推送上下文，用于去重
         domain: 当前汇总所属 domain，用于选择 domain 专属 digest prompt
     """
-    prompt_path = _get_domain_prompt_path(config, domain)
+    prompt_path = _get_domain_prompt_path(config, domain, "digest")
     if not prompt_path:
         raise ValueError(f"未配置 domain={domain or ''} 的 digest prompt")
 

@@ -12,7 +12,7 @@
     "fetch_lookback_minutes": 120,
     "push_cron": [
       "0 8 * * *",
-      "15 18 * * *"
+      "0 19 * * *"
     ],
     "timezone_hours": 8
   },
@@ -38,17 +38,18 @@
           {
             "key": "AI",
             "score_standard": "prompts/score/ai/score_standard.md",
-            "digest": "prompts/digest/ai/digest.md"
+            "digest": "prompts/digest/ai/digest.md",
+            "immediate_push": "prompts/immediate/ai/immediate_push.md"
           },
           {
             "key": "Investment",
             "score_standard": "prompts/score/investment/score_standard.md",
-            "digest": "prompts/digest/investment/digest.md"
+            "digest": "prompts/digest/investment/digest.md",
+            "immediate_push": "prompts/immediate/investment/immediate_push.md"
           }
         ]
       },
-      "score_batch": "prompts/score/score_batch.md",
-      "immediate_push": "prompts/immediate_push.md"
+      "score_batch": "prompts/score/score_batch.md"
     }
   },
   "push": {
