@@ -133,7 +133,11 @@ def _build_batch_prompt(
     entries_json = json.dumps(entries_for_llm, ensure_ascii=False, indent=2)
 
     # 从文件加载提示词模板，如果未指定则使用默认路径
-    prompt_path = config.get("prompts", {}).get("score_batch", "prompts/score_batch.md")
+    prompt_path = config.get("prompts", {}).get("score_batch")
+
+    if not prompt_path:
+        raise ValueError("没有配置score_batch")
+
     if prompt_path is None:
         prompt_path = "prompts/score_batch.md"
 
