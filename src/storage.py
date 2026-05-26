@@ -1,7 +1,9 @@
 """数据存储模块 - JSON文件读写"""
 
 import json
+import os
 import re
+import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -280,9 +282,28 @@ def save_fetch_file(filepath: str, meta: Dict, entries: List[Dict]):
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = {"meta": meta, "entries": entries}
+    temp_path = None
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            temp_path = Path(f.name)
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+        temp_path.replace(path)
+    except Exception:
+        if temp_path and temp_path.exists():
+            temp_path.unlink()
+        raise
 
 
 def append_entries(filepath: str, new_entries: List[Dict], meta: Dict = None):
