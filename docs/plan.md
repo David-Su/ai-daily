@@ -3,12 +3,12 @@
 当前待办
 
 - [ ] 日志系统，保存到文件，push和fetch分开，
-- [ ] 早报内容格式优化：参考appso / xiaohu / ai gap
+- [ ] 分领域日报格式持续优化：AI 参考 appso / xiaohu / ai gap，Investment 强化投资含义和风险提示
   - [ ] 优先级顺序
   - [ ] 美化排版
 - [ ] 添加更多信息源，如 TechCrunch、GitHub Trending
-- [ ] x 新增加用户rss源创建： DAIR.AI
 - [ ] 允许fetch链接中的内容对信息进行扩展
+- [ ] 增强配置校验：启动时检查启用 domain 的评分标准、digest prompt 和推送环境变量
 
 长期待办
 
@@ -28,8 +28,16 @@
 | RSS延迟防护 | fetch_lookback_minutes | 防止RSS延迟导致漏读 |
 | LLM异常通知 | 调用方统一上报 | 避免批次级刷屏，同时保留关键异常通知 |
 | Gmail推送 | SMTP + App Password | 不引入额外依赖，适合个人邮箱接收推送 |
+| 分领域内容生产 | `activity_domains` + domain prompt | 同一抓取池可同时产出 AI、Investment 等不同口径摘要 |
+| LLM接口 | OpenAI 兼容 `/chat/completions` | 方便切换 DashScope、OpenRouter、OpenAI 等兼容服务 |
+| LLM重试 | `max_retries` + 指数退避 | 降低临时 429/5xx 对抓取流程的影响 |
 
 ## 开发进度
+
+**2026-05-26**
+- 同步说明文档到最新代码：README、技术规格、协作说明和环境变量示例已对齐分领域评分/摘要、Gmail 默认配置、`tests/test_flow.py` 测试入口和当前数据目录结构
+- 明确当前 LLM 配置使用 OpenAI 兼容接口，默认示例为 DashScope 兼容模式、`OPENAI_API_KEY`、`max_retries` 和分批评分参数
+- 补充 domain 配置说明：`activity_domains` 控制启用领域，`domains[].score_standard` 和 `domains[].digest` 分别控制评分标准与汇总 prompt
 
 **2026-05-14**
 - 新增 Gmail SMTP 推送平台：支持 App Password、收件人环境变量、cc/bcc 与默认 Gmail SMTP 配置
@@ -42,10 +50,10 @@
 - 优化批量评分容错：`score_batch` 在批次返回数量不匹配时会按 `link` 回收可用结果，并聚合错误返回给调用方
 - 移除 `generate_immediate_push` 的 fallback 内容，生成失败时由调用方告警并跳过本次即时推送
 - 新增启动前 LLM 可用性检查：主程序在启动 fetch/push 双循环前先探测 LLM 接口，失败则直接退出
-- 修复 pytest 中遗留的旧推送平台命名问题，将 `wecom` 测试更新为当前 `feishu` 实现
+- 修复 pytest 中遗留的旧推送平台命名问题，将相关测试更新为当前 `feishu` 实现
 
 **2026-03-03**
-- 采用 MIT 许可开源项目，添加 LICENSE 和 NOTICE 文件
+- 采用 MIT 许可开源项目，添加 LICENSE 文件
 - 更新 RSS 源说明，致谢 BestBlogs 项目
 
 **2026-03-02**

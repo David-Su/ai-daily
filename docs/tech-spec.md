@@ -2,217 +2,259 @@
 
 ## 核心架构
 
-### 双循环设计
+AI Daily 使用两个长期运行的异步循环：
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Config (config.json)                    │
-├─────────────────────────────────────────────────────────────┤
-│  sources          filter           schedule      llm/push  │
-│  ├── base_opml    ├── min_score    ├── push_cron            │
-│  ├── add[]        ├── context_days ├── fetch_interval       │
-│  ├── block[]      └── hot_threshold                        │
-│  └── block_domains[]                                       │
-└─────────────────────────────────────────────────────────────┘
+- **Fetch Loop**：按固定间隔抓取 RSS，转换内容、批量评分、保存抓取结果，并处理高分即时推送。
+- **Push Loop**：按 `schedule.push_cron` 计算下一次触发时间，按 domain 生成定时汇总并推送。
+
+```text
+┌──────────────────────────────────────────────────────────────┐
+│                     Config (config.json)                     │
+├──────────────────────────────────────────────────────────────┤
+│ sources        filter        schedule       llm/prompts/push │
+│ base_opml      min_score     fetch interval domain prompts   │
+│ add/block      threshold     push_cron      platforms        │
+└──────────────────────────────────────────────────────────────┘
                             │
            ┌────────────────┴────────────────┐
            ▼                                 ▼
 ┌─────────────────────┐           ┌─────────────────────┐
-│   Fetch Loop        │           │   Push Loop         │
-│   (每30分钟)        │           │   (croniter定时)    │
+│ Fetch Loop          │           │ Push Loop           │
+│ fixed interval      │           │ croniter schedule   │
 │                     │           │                     │
-│  • 抓取RSS          │           │  • 收集条目         │
-│  • LLM评分          │           │  • 生成汇总         │
-│  • 保存JSON         │           │  • 推送+存档        │
-│  • 热点即时推送     │           │                     │
+│ - fetch RSS         │           │ - collect entries   │
+│ - HTML to Markdown  │           │ - group by domain   │
+│ - score batch       │           │ - compose digest    │
+│ - instant push      │           │ - push and archive  │
 └─────────────────────┘           └─────────────────────┘
            │                                 │
            └────────────────┬────────────────┘
                             ▼
                  ┌─────────────────────┐
-                 │   news-data/        │
-                 │   ├── fetch-*.json  │
-                 │   └── push/<domain>/│
+                 │ news-data/          │
+                 │ fetch-*.json        │
+                 │ notify-*.md         │
+                 │ push/<domain>/*.md  │
                  └─────────────────────┘
 ```
 
-### 数据流
+## 数据流
 
 ```mermaid
 flowchart LR
-    subgraph RSS源 ["📡 RSS Sources"]
-        direction LR
-        RS1[Twitter/X]
-        RS2[媒体报道]
-        RS3[技术博客]
-        RS4[微信公众号]
-    end
-
-    subgraph 存储层 ["💾 Storage (news-data/)"]
-        DB[(JSON/MD文件存储)]
-    end
-
-    subgraph Fetch循环 ["🔄 Fetch Loop"]
-        FL[定时抓取 RSS] --> MD[HTML转Markdown] --> LLM[LLM智能评分]
-
-        subgraph 即时推送 ["⚡ Instant Push (score >= 90)"]
-            HOT{评分 >= 90?} -->|是| IP[即时推送]
-        end
-    end
-
-    subgraph Push循环 ["📅 Push Loop"]
-        CRON{cron定时触发}
-        PROC[读取评分数据]
-        PUSH[生成 push/<domain>/push-*.md]
-        PLAT[推送至 Discord/飞书]
-    end
-
-    RSS源 --> FL
-
-    LLM --> HOT
-    HOT -->|否| DB
-    IP --> DB
-
-    DB --> PROC
-
-    CRON --> PROC
-    PROC --> PUSH
-    PUSH --> PLAT
-
-    style RSS源 fill:#e1f5fe
-    style 存储层 fill:#fff8e1
-    style Fetch循环 fill:#e8f5e9
-    style Push循环 fill:#f3e5f5
+    A["RSS Sources"] --> B["merge_sources"]
+    B --> C["fetch_all_feeds"]
+    C --> D["html_to_markdown"]
+    D --> E["score_batch"]
+    E --> F["fetch-*.json"]
+    E --> G{"score >= hot_threshold"}
+    G -->|yes| H["generate_immediate_push"]
+    H --> I["send_to_platforms"]
+    H --> J["notify-*.md"]
+    F --> K["collect_entries_for_domain_pushes"]
+    K --> L["compose_digest(domain)"]
+    L --> I
+    L --> M["push/<domain>/push-*.md"]
 ```
 
 ## 关键模块
 
-### 1. main.py
+### `src/main.py`
 
-入口与双循环：
+职责：
+
+- 加载 `.env` 和 `config.json`
+- 启动前调用 `check_llm_available()` 检查 LLM 可用性
+- 并发启动 `fetch_loop()` 和 `push_loop()`
+- 统一处理 LLM 异常通知
+
+关键流程：
 
 ```python
+config = load_config()
 await check_llm_available(config["llm"])
-await asyncio.gather(
-    fetch_loop(config),    # 定时抓取
-    push_loop(config)      # cron定时推送
-)
+await asyncio.gather(fetch_loop(config), push_loop(config))
 ```
 
-关键启动流程：
-- 先加载配置
-- 启动前执行一次 LLM 可用性检查
-- 检查失败时直接退出，避免系统带病运行
+`run_fetch_job(config)`：
 
-**collect_entries_for_domain_pushes()** - 按 domain 收集核心：
+1. 根据 `fetch_interval_minutes` 和 `fetch_lookback_minutes` 计算 UTC 抓取窗口。
+2. 合并 OPML 与自定义源，应用 `block` 和 `block_domains`。
+3. 并发抓取 RSS，转换 HTML 为 Markdown。
+4. 基于近期已保存链接去重。
+5. 调用 `score_batch()` 分领域批量评分。
+6. 保存到 `news-data/fetch-YYYY-MM-DD.json`。
+7. 对达到 `hot_threshold` 的条目生成即时快讯，推送并追加到 `notify-YYYY-MM-DD.md`。
 
-```python
-def collect_entries_for_domain_pushes(
-    context_days: int = 2,
-    min_score: int = 60,
-) -> Dict[str, Dict]:
-    """
-    返回每个 domain 独立的待推送条目、上下文条目和推送边界
+`run_push_job(config)`：
 
-    逻辑：
-    1. 获取 context_days 天的所有条目
-    2. 按 min_score 过滤
-    3. 根据 entry.domain 分组
-    4. 每个 domain 独立读取最新 push 文件并计算 push_cutoff
-    5. 晚于 push_cutoff → 待推送；早于 push_cutoff → 上下文
-    """
-```
+1. 调用 `collect_entries_for_domain_pushes()` 按 domain 收集候选内容。
+2. 每个 domain 独立读取上次 push 时间，并以 24 小时窗口作为兜底边界。
+3. 加载该 domain 近期 push 标题作为查重上下文。
+4. 调用 `compose_digest(..., domain=domain)` 使用 domain 专属 prompt 生成汇总。
+5. 推送到启用平台，并保存到 `news-data/push/<domain>/push-*.md`。
 
-### 2. push_loop() - 使用 croniter
+### `src/config.py`
 
-```python
-async def push_loop(config: Dict):
-    cron_list = config['schedule']['push_cron']
-    valid_crons = [c for c in cron_list if croniter.is_valid(c)]
+职责：
 
-    while True:
-        next_push = min(
-            croniter(cron, now).get_next(datetime)
-            for cron in valid_crons
-        )
-        await asyncio.sleep(wait_seconds)
-        await run_push_job(config)
-        await asyncio.sleep(1)
-```
+- `load_config()` 读取 JSON 配置。
+- `parse_opml()` 解析 OPML 订阅源。
+- `merge_sources()` 合并 `base_opml + add - block`，并按 `xmlUrl` 去重。
+- `block_domains` 支持 `*.substack.com` 形式，也支持 `fnmatch` 通配。
+- `get_timezone()` 优先读取 `schedule.timezone_hours`，未配置时使用系统本地时区。
 
-关键设计:
-- 无状态：每次循环重新计算时间
-- croniter：专业 cron 解析，自动处理跨天
-- 优雅退出：asyncio.sleep 可被 CancelledError 打断
+### `src/fetcher.py`
 
-### 3. fetcher.py
+职责：
 
-HTTP 请求头（避免 403）:
+- 使用 `aiohttp` 并发抓取 RSS。
+- 使用浏览器风格请求头降低 403 概率。
+- 使用 `feedparser` 解析条目。
+- RSS 时间统一解析为 UTC `datetime`，抓取过滤也基于 UTC。
 
-```python
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36...",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-}
-```
-
-域名屏蔽: config.json 中的 `block_domains` 支持通配符 `*.substack.com`
-
-### 4. llm.py
-
-批量评分：
-
-```python
-async def score_batch(entries: List[Dict], config: Dict) -> tuple[List[Dict], List[str]]:
-    """
-    智能分批评分：
-    1. 根据 max_prompt_chars 自动分批
-    2. 多批次并行处理（限制并发数）
-    3. 通过 link 字段关联结果
-    4. 聚合各批次 LLM 错误并返回给调用方统一上报
-    """
-```
-
-LLM 异常处理：
-- `score_batch()` 会仅保留按 `link` 可匹配的评分结果，并返回聚合错误列表
-- `generate_immediate_push()` 失败时不再生成 fallback 内容，而是返回空内容和错误信息，由调用方决定是否告警与跳过推送
-- `compose_digest()` 失败时由调用方捕获，并通过现有推送渠道发送简单异常通知
-
-### 5. storage.py
-
-JSON 格式:
+输出条目基础结构：
 
 ```json
 {
-  "meta": {"date": "2024-01-15"},
+  "title": "无标题",
+  "link": "",
+  "published": "datetime",
+  "source": "Feed Title",
+  "content": "",
+  "tags": [],
+  "score": 0,
+  "summary": ""
+}
+```
+
+### `src/processor.py`
+
+职责：
+
+- 使用 `markdownify` 把 RSS HTML 正文转 Markdown。
+- 根据原始链接补全相对链接和图片地址。
+- 移除 `xgo.ing` 推广链接。
+- 清理多余空行。
+
+### `src/llm.py`
+
+LLM 调用统一使用 OpenAI 兼容接口：
+
+```python
+url = f"{base_url}/chat/completions"
+payload = {
+    "model": model,
+    "messages": [{"role": "user", "content": prompt}],
+    "temperature": 0.3,
+}
+```
+
+`call_llm()` 支持：
+
+- 从 `apiKeyName` 指定的环境变量读取密钥。
+- `max_retries` 控制重试次数。
+- 对 `404, 429, 500, 502, 503, 504` 做指数退避重试。
+
+`score_batch(entries, config)`：
+
+1. 读取 `prompts.score_batch`。
+2. 从 `prompts.domain.activity_domains` 构建可选领域列表。
+3. 读取启用 domain 的 `score_standard`，拼进评分 prompt。
+4. 根据 `max_prompt_chars` 自动分批。
+5. 使用 `max_concurrent_batches` 控制并发。
+6. 解析 LLM JSON 数组，并按 `link` 回填 `domain`、`score`、`tags`、`summary`。
+7. 当返回数量异常时，保留可按 `link` 匹配的结果，同时返回错误列表。
+
+`generate_immediate_push()`：
+
+- 使用 `prompts.immediate_push`。
+- 传入本次热点条目和近期 notify/push 标题。
+- 失败时返回空内容和错误信息，由调用方告警并跳过本次即时推送。
+
+`compose_digest()`：
+
+- 必须传入 `domain`。
+- 通过 `llm.prompts.domain.domains[].digest` 查找 domain 专属汇总 prompt。
+- 未配置对应 digest 时直接报错。
+- 传入待推送条目、历史上下文和近期 push 标题。
+
+### `src/storage.py`
+
+主要文件：
+
+| 文件 | 说明 |
+|------|------|
+| `news-data/fetch-YYYY-MM-DD.json` | 当天抓取和评分结果 |
+| `news-data/notify-YYYY-MM-DD.md` | 当天即时推送内容，按块追加 |
+| `news-data/push/<domain>/push-YYYY-MM-DD-HH-MM-SS.md` | 定时汇总推送归档 |
+
+`fetch-*.json` 格式：
+
+```json
+{
+  "meta": { "date": "2026-05-26" },
   "entries": [
     {
       "title": "...",
       "link": "...",
       "published": "...",
       "fetched_at": "...",
+      "source": "...",
+      "content": "...",
+      "tags": ["..."],
+      "domain": "AI",
       "score": 85,
-      "tags": ["AI"],
-      "summary": "...",
-      "content": "..."
+      "summary": "..."
     }
   ]
 }
 ```
 
+`push-*.md` frontmatter：
+
+```yaml
+---
+pushDate: "2026-05-26T16:40:05+08:00"
+domain: "AI"
+sourceCount: 8
+totalEntries: 8
+---
+```
+
+去重与上下文：
+
+- `load_existing_links()` 在跨天边界会读取昨天和今天的 fetch 文件，降低重复抓取。
+- `load_recent_notify_titles()` 只提取即时推送标题供 LLM 查重。
+- `load_recent_push_titles()` 只提取历史汇总标题供 LLM 查重。
+- 传给 LLM 的历史推送上下文是标题清单，不把完整成品文案传回去模仿。
+
+### `src/push/`
+
+平台注册入口是 `create_platform()`：
+
+```python
+platforms = {
+    "discord": DiscordPlatform,
+    "feishu": FeishuPlatform,
+    "gmail": GmailPlatform,
+}
+```
+
+| 平台 | 行为 |
+|------|------|
+| Discord | Webhook 发送纯文本，按 2000 字符切分 |
+| 飞书 | 发送 V2 interactive card，Markdown 元素按 8000 字符切分 |
+| Gmail | SMTP 发送 `multipart/alternative` 邮件，Markdown + HTML 双正文 |
+
+`send_to_platforms()` 会遍历所有配置项，只发送到 `enabled=true` 且配置校验通过的平台。单个平台失败只打印错误，不中断其他平台。
+
 ## 配置详解
 
-### config.json
+当前 `config.json` 顶层结构：
 
 ```json
 {
-  "sources": {
-    "base_opml": "resources/rss.opml",
-    "add": [{"title": "...", "xmlUrl": "...", "category": "..."}],
-    "block": [{"title": "...", "xmlUrl": "..."}],
-    "block_domains": ["*.substack.com", "*.youtube.com"]
-  },
   "filter": {
     "min_score": 60,
     "hot_threshold": 90,
@@ -224,20 +266,44 @@ JSON 格式:
   "schedule": {
     "fetch_interval_minutes": 30,
     "fetch_lookback_minutes": 120,
-    "push_cron": ["0 8 * * *", "0 17 * * *"],
+    "push_cron": ["0 8 * * *", "40 16 * * *"],
     "timezone_hours": 8
+  },
+  "fetch": {
+    "max_workers": 10,
+    "timeout": 10
   },
   "llm": {
     "provider": "openai",
-    "model": "x-ai/grok-4.1-fast",
-    "baseUrl": "https://openrouter.ai/api/v1",
-    "apiKeyName": "OPENROUTER_API_KEY",
-    "max_prompt_chars": 128000,
-    "max_concurrent_batches": 3
+    "model": "qwen3.5-flash",
+    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "apiKeyName": "OPENAI_API_KEY",
+    "max_prompt_chars": 20000,
+    "max_concurrent_batches": 2,
+    "max_retries": 3,
+    "prompts": {
+      "domain": {
+        "activity_domains": ["AI", "Investment"],
+        "domains": [
+          {
+            "key": "AI",
+            "score_standard": "prompts/score/ai/score_standard.md",
+            "digest": "prompts/digest/ai/digest.md"
+          },
+          {
+            "key": "Investment",
+            "score_standard": "prompts/score/investment/score_standard.md",
+            "digest": "prompts/digest/investment/digest.md"
+          }
+        ]
+      },
+      "score_batch": "prompts/score/score_batch.md",
+      "immediate_push": "prompts/immediate_push.md"
+    }
   },
   "push": {
     "discord": {
-      "enabled": true,
+      "enabled": false,
       "apiKeyName": "DISCORD_WEBHOOK_URL"
     },
     "feishu": {
@@ -245,7 +311,7 @@ JSON 格式:
       "apiKeyName": "FEISHU_WEBHOOK_URL"
     },
     "gmail": {
-      "enabled": false,
+      "enabled": true,
       "usernameKeyName": "GMAIL_USERNAME",
       "passwordKeyName": "GMAIL_APP_PASSWORD",
       "toKeyName": "GMAIL_TO",
@@ -255,205 +321,100 @@ JSON 格式:
 }
 ```
 
-**schedule 配置**：
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `fetch_interval_minutes` | int | 30 | fetch 频率（分钟） |
-| `fetch_lookback_minutes` | int | 120 | RSS 冗余缓存时间（分钟），必须大于 `fetch_interval_minutes`，用于防止 RSS 延迟导致漏读 |
-| `push_cron` | list | - | 推送时间 cron 表达式 |
-| `timezone_hours` | int | 8 | 时区偏移（小时） |
-
 ### 环境变量
 
-敏感信息通过环境变量管理：
-
-| 配置项 | 环境变量 | 说明 |
-|--------|----------|------|
-| LLM API Key | `OPENROUTER_API_KEY` | 在 `llm.apiKeyName` 中指定 |
-| Discord Webhook | `DISCORD_WEBHOOK_URL` | 在 `push.discord.apiKeyName` 中指定 |
-| 飞书 Webhook | `FEISHU_WEBHOOK_URL` | 在 `push.feishu.apiKeyName` 中指定 |
-| Gmail 发件账号 | `GMAIL_USERNAME` | 在 `push.gmail.usernameKeyName` 中指定 |
-| Gmail App Password | `GMAIL_APP_PASSWORD` | 在 `push.gmail.passwordKeyName` 中指定 |
-| Gmail 收件人 | `GMAIL_TO` | 在 `push.gmail.toKeyName` 中指定 |
-
-Gmail 推送邮件使用 `multipart/alternative`，同时包含纯文本 Markdown 和渲染后的 HTML 正文。
+| 配置项 | 默认环境变量 | 说明 |
+|--------|--------------|------|
+| LLM API Key | `OPENAI_API_KEY` | 由 `llm.apiKeyName` 指定，可改成任意变量名 |
+| Discord Webhook | `DISCORD_WEBHOOK_URL` | 由 `push.discord.apiKeyName` 指定 |
+| 飞书 Webhook | `FEISHU_WEBHOOK_URL` | 由 `push.feishu.apiKeyName` 指定 |
+| Gmail 发件账号 | `GMAIL_USERNAME` | 由 `push.gmail.usernameKeyName` 指定 |
+| Gmail App Password | `GMAIL_APP_PASSWORD` | 由 `push.gmail.passwordKeyName` 指定 |
+| Gmail 收件人 | `GMAIL_TO` | 由 `push.gmail.toKeyName` 指定 |
 
 ## 目录结构
 
-```
-daily-news/
+```text
+ai-daily/
 ├── src/
-│   ├── main.py          # 入口 + 双循环
-│   ├── config.py        # 配置加载 + 源合并
-│   ├── fetcher.py       # RSS 抓取
-│   ├── llm.py           # LLM 评分/汇总
-│   ├── processor.py     # HTML → Markdown
-│   ├── storage.py       # JSON 读写
-│   └── push/            # 推送平台
+│   ├── main.py
+│   ├── config.py
+│   ├── fetcher.py
+│   ├── llm.py
+│   ├── processor.py
+│   ├── storage.py
+│   └── push/
 │       ├── __init__.py
-│       ├── base.py      # 基类
+│       ├── base.py
 │       ├── discord.py
-│       └── feishu.py
+│       ├── feishu.py
+│       └── gmail.py
+├── prompts/
+│   ├── immediate_push.md
+│   ├── score/
+│   │   ├── score_batch.md
+│   │   ├── ai/score_standard.md
+│   │   └── investment/score_standard.md
+│   └── digest/
+│       ├── ai/digest.md
+│       └── investment/digest.md
 ├── tests/
-│   ├── conftest.py         # pytest fixtures
-│   ├── test_config.py      # 配置模块测试
-│   ├── test_push.py        # 推送平台测试
-│   ├── test_push_loop.py   # 推送循环集成测试
-│   ├── fetch_news.py       # RSS抓取脚本
-│   ├── push_news.py        # 推送测试脚本
-│   ├── score_batch.py      # LLM批量评分脚本
-│   ├── run_llm_test.py    # LLM综合测试脚本
-│   ├── news-data/          # 测试数据目录
-│   └── fixtures/           # 测试fixtures
-├── config.json             # 主配置
-├── requirements.txt
-├── news-data/           # 数据目录
+│   └── test_flow.py
+├── resources/
+│   └── rss.opml
+├── news-data/
 │   ├── fetch-*.json
+│   ├── notify-*.md
 │   └── push/<domain>/push-*.md
-├── prompts/             # LLM 提示词
-│   ├── score.txt
-│   ├── immediate_push.txt
-│   └── digest.txt
-└── resources/
-    └── rss.opml         # RSS 订阅源
+├── config.json
+├── requirements.txt
+├── Dockerfile
+└── docker-compose.yml
 ```
 
 ## 扩展指南
 
 ### 添加新推送平台
 
-1. 在 `src/push/` 创建新文件
-2. 继承 `PushPlatform` 基类
-3. 实现 `validate_config()` 和 `send()`
-4. 在 `create_platform()` 中注册
+1. 在 `src/push/` 创建新文件。
+2. 继承 `PushPlatform`。
+3. 实现 `validate_config()` 和 `send()`。
+4. 在 `src/push/__init__.py` 的 `create_platform()` 中注册。
 
-### 修改评分逻辑
+### 添加新 domain
 
-编辑 `prompts/score.txt`，调整评分标准。
+1. 新增评分标准文件，例如 `prompts/score/<domain>/score_standard.md`。
+2. 新增摘要 prompt，例如 `prompts/digest/<domain>/digest.md`。
+3. 在 `config.json` 的 `llm.prompts.domain.domains` 中添加配置。
+4. 在 `llm.prompts.domain.activity_domains` 中启用该 domain。
 
 ### 添加新源
 
-编辑 `config.json` 的 `sources.add` 列表。
-
+编辑 `config.json` 的 `sources.add` 列表。需要屏蔽源时优先使用 `sources.block` 或 `sources.block_domains`，避免直接改 OPML。
 
 ## 测试指南
 
-### 实用测试脚本
-
-项目提供了一套完整的测试脚本，用于实际数据测试：
-
-| 文件 | 类型 | 说明 |
-|------|------|------|
-| `tests/fetch_news.py` |  RSS抓取测试 | 根据时间抓取过去一定时间内的信息，并存放到 tests/news-data 文件夹内 |
-| `tests/push_news.py` | 推送测试 | 支持 --fake (默认从fetch数据)、--real (从push文件发送) 两种模式 |
-| `tests/test_push_loop.py` |  push循环时间逻辑（约90秒） |测试push循环时间逻辑 应在运行时刻接下来的30s和90s各调用一次push |
-| `tests/run_llm_test.py` |  LLM综合测试 | 依赖fetch_news.py。 根据抓取的信息源，测试llm打分/推送等功能是否正常|
-| `tests/test_fetch_lookback.py` | fetch_lookback_minutes功能测试 | 测试 cutoff 时间计算、阈值逻辑、跨天边界去重 |
-| `tests/test_cleanup_old_files.py` | 旧文件清理测试 | 测试 cleanup_old_files 函数，自动创建/清理不同日期的测试文件 |
-
-#### 1. fetch_news.py - RSS抓取
-
 ```bash
-# 获取过去1小时的新闻
-python tests/fetch_news.py
-
-# 获取过去30分钟的新闻
-python tests/fetch_news.py --minutes 30
-
-# 获取过去24小时的新闻
-python tests/fetch_news.py --hours 24
-
-# 指定输出目录
-python tests/fetch_news.py --output-dir my-data
-
-# 限制每域名最大源数量
-python tests/fetch_news.py --max-per-domain 10
+pytest tests/test_flow.py -v
 ```
 
-#### 2. push_news.py - 推送测试
+`tests/test_flow.py` 默认读取根目录 `config.json`，保持测试和真实配置接口一致。它覆盖主流程中的主要步骤：
 
-```bash
-# 默认模式：从 fetch 数据读取发送
-python tests/push_news.py
+| 步骤 | 测试内容 |
+|------|----------|
+| 配置 | 校验 `sources`、`filter`、`schedule`、`fetch`、`llm`、`push`，并检查 prompt 文件路径存在 |
+| 抓取前处理 | 合并 RSS 源、去重、屏蔽源、HTML 转 Markdown |
+| LLM 评分 | 使用 fake LLM 返回 JSON，验证评分、domain、summary 合并 |
+| Digest | 使用 fake LLM 验证 domain digest prompt 可调用 |
+| 存储和筛选 | 写入临时 fetch 文件，再按分数、domain、时间筛出待推送和上下文 |
+| 推送 | 基于 `config.json` 的 Gmail 配置构建邮件消息，不发送真实邮件 |
 
-# 模拟真实推送：从 news-data/push/*/push-*.md 最新文件发送
-python tests/push_news.py --real
+真实服务测试默认关闭。需要调试时直接改 `tests/test_flow.py` 顶部变量：
+
+```python
+RUN_REAL_RSS_FETCH = True
+RUN_REAL_LLM_SCORE = True
+RUN_REAL_LLM_DIGEST = True
+RUN_REAL_PUSH = True
+DEBUG_DOMAIN = "AI"
 ```
-
-#### 3. test_push_loop.py - push循环时间逻辑
-
-```bash
-# 测试push循环时间逻辑 应在运行时刻接下来的30s和90s各调用一次push
-python tests/test_push_loop.py
-```
-
-#### 4. run_llm_test.py - LLM综合测试
-
-```bash
-# 测试评分功能
-python tests/run_llm_test.py --score
-
-# 测试即时推送
-python tests/run_llm_test.py --immediate-push --push
-
-# 测试汇总推送
-python tests/run_llm_test.py --digest --push
-
-# 推送到Discord
-python tests/run_llm_test.py --all --push
-
-# 运行所有测试
-python tests/run_llm_test.py --all
-```
-
-#### 5. test_fetch_lookback.py - fetch_lookback_minutes功能测试
-
-```bash
-# 运行测试
-python tests/test_fetch_lookback.py
-```
-
-#### 6. test_cleanup_old_files.py - 旧文件清理测试
-
-```bash
-# 运行测试
-python tests/test_cleanup_old_files.py
-```
-
-## pytest 集成测试
-
-### 运行测试
-
-```bash
-# 激活虚拟环境
-source ../.venv/bin/activate
-
-# 运行所有 pytest 测试
-pytest tests/pytest/ -v
-
-# 运行特定模块测试
-pytest tests/pytest/test_config.py
-pytest tests/pytest/test_llm.py
-
-# 查看详细输出
-pytest tests/pytest/ -v --tb=short
-
-# 测试 push 循环时间逻辑（约90秒）
-python tests/test_push_loop.py
-```
-
-### 测试覆盖
-
-| 模块 | 测试文件 | 测试数 | 测试内容 |
-|------|----------|--------|----------|
-| config.py | `test_config.py` | 18 | 配置加载、OPML解析、源合并(block/add/去重)、域名屏蔽、时区获取 |
-| fetcher.py | `test_fetcher.py` | 10 | RSS抓取、时间解析、超时处理、并发控制 |
-| storage.py | `test_storage.py` | 24 | JSON读写、条目追加去重、文件路径、过期清理 |
-| llm.py | `test_llm.py` | 16 | prompt加载、JSON解析、分批处理、评分合并 |
-| processor.py | `test_processor.py` | 14 | HTML→Markdown、相对链接、xgo.ing移除 |
-| main.py | `test_main.py` | 16 | 时间解析、推送时间计算、条目收集 |
-| push/ | `test_push.py` | 17 | Discord/企业微信配置、消息分割、推送验证 |
-| timezone/ | `test_timezone.py` | 11 | 时区转换、datetime操作 |
-| fixtures | `conftest.py` | - | 共享fixtures |
-| **合计** | | **132** | |
