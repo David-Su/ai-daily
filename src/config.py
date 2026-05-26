@@ -22,7 +22,8 @@ def get_timezone(config: Dict = None) -> timezone:
     if config is None:
         try:
             config = load_config()
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 加载配置失败，使用系统本地时区: {type(e).__name__}: {e}")
             return _get_local_timezone()
 
     hours = config.get("schedule", {}).get("timezone_hours")
@@ -92,7 +93,8 @@ def merge_sources(sources_config: Dict) -> List[Dict]:
                     elif fnmatch.fnmatch(domain, pattern):
                         return True
                 return False
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ 解析订阅源域名失败，跳过域名屏蔽: {url} | {type(e).__name__}: {e}")
                 return False
 
         filtered = [s for s in filtered if not is_domain_blocked(s.get("xmlUrl", ""))]

@@ -163,7 +163,8 @@ def load_recent_notify_titles(
             with open(notify_file, "r", encoding="utf-8") as f:
                 items.extend(_extract_notify_titles(f.read()))
                 loaded_files.append(notify_file.name)
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ 解析 notify 文件失败: {notify_file} | {type(e).__name__}: {e}")
             continue
 
     if loaded_files:
@@ -203,7 +204,8 @@ def load_recent_push_titles(
                     content = f.read()
                     items.extend(_extract_push_titles(content))
                     loaded_files.append(str(push_file.relative_to(data_path)))
-            except Exception:
+            except Exception as e:
+                print(f"⚠️ 解析 push 文件失败: {push_file} | {type(e).__name__}: {e}")
                 continue
 
     if loaded_files:
