@@ -60,7 +60,7 @@ async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
 
     try:
         print(f"⚠️ LLM异常 推送到平台")
-        await send_to_platforms("\n".join(lines), config["push"])
+        await send_to_platforms("\n".join(lines), config["push"],title="AI Daily 异常警报")
     except Exception as e:
         print(f"⚠️ LLM异常通知发送失败: {e}")
 
@@ -311,7 +311,7 @@ async def run_fetch_job(config: Dict):
                 print(f"ℹ️ [{domain}] 无新内容需要推送 (LLM判定为重复内容)")
             else:
                 await send_to_platforms(
-                    push_content, config["push"], title=f"{domain} 即时快讯"
+                    push_content, config["push"], title=f"AI Daily 即时快讯"
                 )
                 # 保存即时推送内容到notify文件
                 notify_file = get_notify_file(domain=domain)
@@ -386,7 +386,7 @@ async def run_push_job(config: Dict):
             print(f"⚠️ [{domain}] 推送内容为空，跳过")
             continue
 
-        await send_to_platforms(push_content, config["push"], title=f"{domain} 资讯汇总")
+        await send_to_platforms(push_content, config["push"], title=f"AI Daily 资讯汇总")
 
         push_file = get_push_file(domain=domain)
         save_push_file(
