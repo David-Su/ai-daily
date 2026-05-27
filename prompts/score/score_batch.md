@@ -25,26 +25,28 @@
 0分
 
 ## 输出要求
-必须返回纯 JSON 数组，每个对象包含：
+必须返回纯 JSON 对象，对象内包含 `items` 数组。`items` 中每个对象包含：
 - `link`: 原文链接（必须保留原样）
 - `domain`: 所属领域（严格按照所属领域归类标准进行归类）
 - `score`: 整数评分（严格按照上述标准，宁缺毋滥）
 - `tags`: 标签（如 ["大模型", "开源", "教程"]），事件聚类词（最多5个字，用于把讨论同一件事的推文归类，例如 "Nano Banana 2发布", "DoD与Anthropic", "Cursor更新"）
 - `summary`: 一句话客观摘要（提取核心事实，去掉主观情绪，50字内）
 
-## 输出格式（严格只输出 JSON 数组，不要 markdown 标记，不要其他废话）：
-[
+## 输出格式（严格只输出 JSON 对象，不要 markdown 标记，不要其他废话）：
 {
-    "link": "https://example.com/article1",
-    "score": 95,
-    "tags": ["模型", "重磅", "GPT-5发布"],
-    "domain":"AI",
-    "summary": "OpenAI正式发布GPT-5，支持原生多模态实时交互。"
+  "items": [
+    {
+      "link": "https://example.com/article1",
+      "score": 95,
+      "tags": ["模型", "重磅", "GPT-5发布"],
+      "domain": "AI",
+      "summary": "OpenAI正式发布GPT-5，支持原生多模态实时交互。"
+    }
+  ]
 }
-]
 
 ## 重要提示
 
-1. 返回的数组长度必须与输入相同
+1. `items` 数组长度必须与输入相同
 2. link字段必须与输入一一对应，用于关联原始数据
-3. 只返回JSON数组，不要任何其他文字
+3. 只返回JSON对象，不要任何其他文字

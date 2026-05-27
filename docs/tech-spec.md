@@ -153,6 +153,7 @@ payload = {
 `call_llm()` 支持：
 
 - 从 `apiKeyName` 指定的环境变量读取密钥。
+- 通过可选 `response_format` 透传 OpenAI 兼容 JSON mode 等结构化输出配置。
 - `max_retries` 控制重试次数。
 - 对 `404, 429, 500, 502, 503, 504` 做指数退避重试。
 
@@ -163,7 +164,7 @@ payload = {
 3. 读取启用 domain 的 `score_standard`，拼进评分 prompt。
 4. 根据 `max_prompt_chars` 自动分批。
 5. 使用 `max_concurrent_batches` 控制并发。
-6. 解析 LLM JSON 数组，并按 `link` 回填 `domain`、`score`、`tags`、`summary`。
+6. 评分调用传入 `response_format={"type": "json_object"}`，优先解析 `{"items": [...]}`，并兼容旧式顶层 JSON 数组。
 7. 当返回数量异常时，保留可按 `link` 匹配的结果，同时返回错误列表。
 
 `generate_immediate_push()`：

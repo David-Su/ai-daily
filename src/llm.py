@@ -35,7 +35,9 @@ def load_prompt(prompt_path: str, **kwargs) -> str:
     return template
 
 
-async def call_llm(prompt: str, config: Dict) -> str:
+async def call_llm(
+    prompt: str, config: Dict, response_format: Optional[Dict] = None
+) -> str:
     """调用LLM API - 统一使用OpenAI兼容接口"""
     model = config.get("model", "gpt-4o-mini")
     base_url = config.get("baseUrl", "https://api.openai.com/v1")
@@ -59,6 +61,8 @@ async def call_llm(prompt: str, config: Dict) -> str:
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
     }
+    if response_format is not None:
+        payload["response_format"] = response_format
 
     url = f"{base_url}/chat/completions"
 
@@ -221,6 +225,54 @@ def _parse_llm_json_response(response: str) -> List[Dict]:
     raise ValueError(f"无法从响应中解析JSON: {response[:200]}...")
 
 
+def _parse_score_response(response: str) -> List[Dict]:
+    """解析评分响应，兼容 json_object 模式和旧数组格式。"""
+    text = response.strip()
+
+    if text.startswith("```json"):
+        text = text[7:]
+    elif text.startswith("```"):
+        text = text[3:]
+
+    if text.endswith("```"):
+        text = text[:-3]
+
+    text = text.strip()
+
+    parsed = None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        for pattern in (r"\{.*\}", r"\[.*\]"):
+            match = re.search(pattern, text, re.DOTALL)
+            if not match:
+                continue
+            try:
+                parsed = json.loads(match.group())
+                break
+            except json.JSONDecodeError:
+                continue
+
+    if parsed is None:
+        print(f"无法从响应中解析JSON: {response}")
+        raise ValueError(f"无法从响应中解析JSON: {response[:200]}...")
+
+    if isinstance(parsed, list):
+        return parsed
+
+    if isinstance(parsed, dict):
+        for key in ("items", "results", "data", "scores"):
+            if isinstance(parsed.get(key), list):
+                return parsed[key]
+
+        list_values = [v for v in parsed.values() if isinstance(v, list)]
+        if len(list_values) == 1:
+            return list_values[0]
+
+    print(f"无法从响应中提取评分数组: {response}")
+    raise ValueError(f"无法从响应中提取评分数组: {response[:200]}...")
+
+
 def _split_entries_for_batch(
         entries: List[Dict],
         max_prompt_chars: int = 10000,
@@ -274,25 +326,34 @@ def _reconcile_batch_results(
     """对单批评分结果按 link 过滤，保留可回收结果"""
     entry_links = {entry.get("link") for entry in entries if entry.get("link")}
     matched_results = []
+    result_links = set()
 
     for item in results:
         if not isinstance(item, dict):
             continue
 
         link = item.get("link")
-        if link and link in entry_links:
-            matched_results.append(item)
+        if link:
+            result_links.add(link)
+            if link in entry_links:
+                matched_results.append(item)
 
     errors = []
     if len(results) != len(entries) or len(matched_results) != len(entries):
-        errors.append(
-            "批次{batch} 评分结果异常: 输入{input_count}, 返回{output_count}, 匹配{matched_count}".format(
-                batch=batch_index + 1,
-                input_count=len(entries),
-                output_count=len(results),
-                matched_count=len(matched_results),
-            )
+        missing_links = sorted(entry_links - result_links)
+        error_message = (
+            "批次{batch} 评分结果异常: 输入{input_count}, 返回{output_count}, "
+            "匹配{matched_count}, 未评分链接({missing_count}): {missing}"
+        ).format(
+            batch=batch_index + 1,
+            input_count=len(entries),
+            output_count=len(results),
+            matched_count=len(matched_results),
+            missing_count=len(missing_links),
+            missing=missing_links,
         )
+        print(f"⚠️ {error_message}")
+        errors.append(error_message)
 
     return matched_results, errors
 
@@ -306,8 +367,10 @@ async def _score_single_batch(
     prompt = _build_batch_prompt(config, entries)
 
     try:
-        response = await call_llm(prompt, config)
-        results = _parse_llm_json_response(response)
+        response = await call_llm(
+            prompt, config, response_format={"type": "json_object"}
+        )
+        results = _parse_score_response(response)
 
         if not isinstance(results, list):
             raise ValueError(f"LLM返回的不是数组: {type(results)}")

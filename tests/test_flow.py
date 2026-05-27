@@ -126,25 +126,28 @@ async def test_score_step_with_fake_llm(monkeypatch):
     domain = _domain(config)
     entries = _sample_entries(domain)
 
-    async def fake_call_llm(prompt, llm_config):
+    async def fake_call_llm(prompt, llm_config, response_format=None):
         assert entries[0]["title"] in prompt
+        assert response_format == {"type": "json_object"}
         return json.dumps(
-            [
-                {
-                    "link": entries[0]["link"],
-                    "tags": ["release"],
-                    "domain": domain,
-                    "score": 88,
-                    "summary": "Release summary",
-                },
-                {
-                    "link": entries[1]["link"],
-                    "tags": ["funding"],
-                    "domain": domain,
-                    "score": 71,
-                    "summary": "Funding summary",
-                },
-            ]
+            {
+                "items": [
+                    {
+                        "link": entries[0]["link"],
+                        "tags": ["release"],
+                        "domain": domain,
+                        "score": 88,
+                        "summary": "Release summary",
+                    },
+                    {
+                        "link": entries[1]["link"],
+                        "tags": ["funding"],
+                        "domain": domain,
+                        "score": 71,
+                        "summary": "Funding summary",
+                    },
+                ]
+            }
         )
 
     monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
@@ -155,6 +158,25 @@ async def test_score_step_with_fake_llm(monkeypatch):
     assert scored[0]["score"] == 88
     assert scored[0]["domain"] == domain
     assert scored[1]["summary"] == "Funding summary"
+
+
+def test_parse_score_response_accepts_legacy_array():
+    """评分解析器仍兼容迁移前的顶层数组输出。"""
+    import src.llm as llm_module
+
+    response = json.dumps(
+        [
+            {
+                "link": "https://example.com/article",
+                "tags": ["release"],
+                "domain": "AI",
+                "score": 88,
+                "summary": "Release summary",
+            }
+        ]
+    )
+
+    assert llm_module._parse_score_response(response)[0]["score"] == 88
 
 
 @pytest.mark.asyncio
