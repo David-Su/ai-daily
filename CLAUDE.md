@@ -25,4 +25,3 @@ AI 驱动的 RSS 新闻聚合与分领域推送系统，支持 400+ 信息源，
 
 - 使用说明 → [README.md](README.md)
 - 技术架构 → [docs/tech-spec.md](docs/tech-spec.md)
-- 开发计划 → [docs/plan.md](docs/plan.md)
