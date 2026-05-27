@@ -37,7 +37,7 @@
 {
     "link": "https://example.com/article1",
     "score": 95,
-    "tags": ["模型", "重磅"，"GPT-5发布"],
+    "tags": ["模型", "重磅", "GPT-5发布"],
     "domain":"AI",
     "summary": "OpenAI正式发布GPT-5，支持原生多模态实时交互。"
 }
