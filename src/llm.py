@@ -9,6 +9,11 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+def compact_json(data) -> str:
+    """Serialize JSON for LLM prompts without whitespace overhead."""
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
 def load_prompt(prompt_path: str, **kwargs) -> str:
     """加载提示词模板并填充变量"""
     path = Path(prompt_path)
@@ -134,7 +139,7 @@ def _build_batch_prompt(
         }
         for e in entries
     ]
-    entries_json = json.dumps(entries_for_llm, ensure_ascii=False, indent=2)
+    entries_json = compact_json(entries_for_llm)
 
     # 从文件加载提示词模板，如果未指定则使用默认路径
     prompt_path = config.get("prompts", {}).get("score_batch")
@@ -155,7 +160,7 @@ def _build_batch_prompt(
 def _build_domain_list(config: Dict):
     domain_config = config.get("prompts", {}).get("domain", {})
     active_domains = domain_config.get("activity_domains", [])
-    return json.dumps(active_domains, ensure_ascii=False, indent=2)
+    return compact_json(active_domains)
 
 def _build_score_standard(config: Dict) -> str:
     """Build enabled domain score standards from prompt files."""
@@ -487,7 +492,7 @@ async def generate_immediate_push(
         prompt = load_prompt(
             prompt_path,
             count=len(entries),
-            entries=json.dumps(entries, ensure_ascii=False, indent=2),
+            entries=compact_json(entries),
             recent_push_context=recent_push_context,
         )
 
@@ -533,7 +538,7 @@ async def compose_digest(
     prompt = load_prompt(
         prompt_path,
         count=len(entries),
-        entries=json.dumps(entries, ensure_ascii=False, indent=2),
+        entries=compact_json(entries),
         context="\n\n".join(context_text),
         recent_push_context=recent_push_context,
         date=datetime.now().strftime("%Y-%m-%d"),
