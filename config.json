@@ -22,7 +22,7 @@
   },
   "llm": {
     "provider": "openai",
-    "model": "qwen3.5-flash",
+    "model": "deepseek-v4-pro",
     "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "apiKeyName": "OPENAI_API_KEY",
     "max_prompt_chars": 64000,
