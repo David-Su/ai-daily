@@ -311,7 +311,7 @@ async def run_fetch_job(config: Dict):
                 print(f"ℹ️ [{domain}] 无新内容需要推送 (LLM判定为重复内容)")
             else:
                 await send_to_platforms(
-                    push_content, config["push"], title=f"AI Daily 即时快讯"
+                    push_content, config["push"], title=f"AI Daily 快讯"
                 )
                 # 保存即时推送内容到notify文件
                 notify_file = get_notify_file(domain=domain)
