@@ -1,7 +1,7 @@
 {
   "filter": {
     "min_score": 60,
-    "hot_threshold": 90,
+    "hot_threshold": 95,
     "context_days": 2,
     "keep_days": 7,
     "push_context_days": 5,
