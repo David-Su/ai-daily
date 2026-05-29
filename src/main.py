@@ -60,7 +60,7 @@ async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
 
     try:
         print(f"⚠️ LLM异常 推送到平台")
-        await send_to_platforms("\n".join(lines), config["push"],title="AI Daily 异常警报")
+        await send_to_platforms("\n".join(lines), config["push"], title="AI Daily 异常警报")
     except Exception as e:
         print(f"⚠️ LLM异常通知发送失败: {e}")
 
@@ -112,7 +112,7 @@ def sort_domains(domains: List[str], config: Dict) -> List[str]:
 
 
 def calculate_push_times(
-    cron_list: List[str], offset_days: int = 0, config: Dict = None
+        cron_list: List[str], offset_days: int = 0, config: Dict = None
 ) -> List[datetime]:
     base_date = datetime.now(get_timezone(config)).date() + timedelta(days=offset_days)
     times = []
@@ -131,10 +131,10 @@ def calculate_push_times(
 
 
 def collect_entries_for_domain_pushes(
-    context_days: int = 2,
-    min_score: int = 60,
-    data_dir: str = "news-data",
-    config: Dict = None,
+        context_days: int = 2,
+        min_score: int = 60,
+        data_dir: str = "news-data",
+        config: Dict = None,
 ) -> Dict[str, Dict]:
     """按 domain 收集推送条目，返回每个 domain 独立的待推送与上下文。"""
     tz = get_timezone(config)
@@ -157,7 +157,8 @@ def collect_entries_for_domain_pushes(
     # 获取{domain:domain对应的entries}
     grouped_entries: Dict[str, List[Dict]] = {}
     for entry in qualified_entries:
-        domain = normalize_entry_domain(entry)
+        domain = entry.get("domain")
+        if not domain or domain.strip() == "": continue
         grouped_entries.setdefault(domain, []).append(entry)
 
     domain_pushes = {}
@@ -244,6 +245,10 @@ async def run_fetch_job(config: Dict):
     if score_errors:
         await notify_llm_errors("score_batch", score_errors, config)
 
+    activity_domains = set(config["llm"]["prompts"]["domain"]["activity_domains"])
+    # 筛选出符合domain要求的entry
+    scored = [entry for entry in scored if entry["domain"] in activity_domains]
+
     is_new_file = not os.path.exists(fetch_file)
     if is_new_file:
         cleanup_old_files(days=config["filter"]["keep_days"])
@@ -267,7 +272,8 @@ async def run_fetch_job(config: Dict):
     if hot_entries:
         hot_entries_by_domain: Dict[str, List[Dict]] = {}
         for entry in hot_entries:
-            domain = normalize_entry_domain(entry)
+            domain:str = entry.get("domain")
+            if not domain or domain.strip() == "": continue
             hot_entries_by_domain.setdefault(domain, []).append(entry)
 
         print(

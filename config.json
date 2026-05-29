@@ -22,8 +22,8 @@
   },
   "llm": {
     "provider": "openai",
-    "model": "deepseek-v4-pro",
-    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": "deepseek-v4-flash",
+    "baseUrl": "https://api.deepseek.com",
     "apiKeyName": "OPENAI_API_KEY",
     "max_prompt_chars": 64000,
     "max_concurrent_batches": 3,
