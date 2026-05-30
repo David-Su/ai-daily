@@ -1,7 +1,7 @@
 {
   "filter": {
     "min_score": 60,
-    "hot_threshold": 95,
+    "hot_threshold": 90,
     "context_days": 2,
     "keep_days": 7,
     "push_context_days": 5,
@@ -11,8 +11,7 @@
     "fetch_interval_minutes": 60,
     "fetch_lookback_minutes": 120,
     "push_cron": [
-      "0 8 * * *",
-      "0 19 * * *"
+      "30 9 * * *"
     ],
     "timezone_hours": 8
   },
