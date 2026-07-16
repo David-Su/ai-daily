@@ -1,0 +1,149 @@
+{
+  "filter": {
+    "min_score": 60,
+    "hot_threshold": 90,
+    "context_days": 2,
+    "keep_days": 7,
+    "push_context_days": 5,
+    "no_content_marker": "[NO_NEW_CONTENT]"
+  },
+  "dedupe": {
+    "fuzzy_enabled": false,
+    "content_threshold": 90
+  },
+  "schedule": {
+    "fetch_interval_minutes": 120,
+    "fetch_lookback_minutes": 180,
+    "push_cron": [
+      "30 9 * * *"
+    ],
+    "hot_push_block_periods": [
+      [
+        "01:00",
+        "09:31"
+      ]
+    ],
+    "timezone_hours": 8
+  },
+  "fetch": {
+    "max_workers": 10,
+    "timeout": 10
+  },
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-5.6-luna",
+    "baseUrl": "https://www.right.codes/codex/v1",
+    "apiKeyName": "RIGHT_CODE_API_KEY",
+    "max_prompt_chars": 64000,
+    "max_concurrent_batches": 3,
+    "max_retries": 3,
+    "prompts": {
+      "domain": {
+        "activity_domains": [
+          "AI",
+          "Investment"
+        ],
+        "domains": [
+          {
+            "key": "AI",
+            "score_standard": "prompts/score/ai/score_standard.md",
+            "digest": "prompts/digest/ai/digest.md",
+            "immediate_push": "prompts/immediate/ai/immediate_push.md"
+          },
+          {
+            "key": "Investment",
+            "score_standard": "prompts/score/investment/score_standard.md",
+            "digest": "prompts/digest/investment/digest.md",
+            "immediate_push": "prompts/immediate/investment/immediate_push.md"
+          }
+        ]
+      },
+      "score_batch": "prompts/score/score_batch.md"
+    }
+  },
+  "push": {
+    "discord": {
+      "enabled": false,
+      "apiKeyName": "DISCORD_WEBHOOK_URL"
+    },
+    "feishu": {
+      "enabled": false,
+      "apiKeyName": "FEISHU_WEBHOOK_URL"
+    },
+    "gmail": {
+      "enabled": true,
+      "usernameKeyName": "GMAIL_USERNAME",
+      "passwordKeyName": "GMAIL_APP_PASSWORD",
+      "toKeyName": "GMAIL_TO",
+      "fromName": "AI Daily"
+    }
+  },
+  "sources": {
+    "base_opml": "resources/rss.opml",
+    "sync": {
+      "enabled": true,
+      "cron": "0 4 * * 0",
+      "backup": true,
+      "timeout": 30,
+      "urls": [
+        "https://raw.githubusercontent.com/ginobefun/BestBlogs/main/BestBlogs_RSS_Articles.opml",
+        "https://raw.githubusercontent.com/JackyST0/awesome-rsshub-routes/main/feeds.opml",
+        "https://raw.githubusercontent.com/tuan3w/awesome-tech-rss/main/feeds.opml",
+        "https://raw.githubusercontent.com/kilimchoi/engineering-blogs/master/engineering_blogs.opml",
+        "https://raw.githubusercontent.com/vishalshar/awesome_ML_AI_RSS_feed/master/rssowl.opml",
+        "https://raw.githubusercontent.com/Evan-XYZ/tib-rss-list/refs/heads/main/sources.opml",
+        "https://raw.githubusercontent.com/plenaryapp/awesome-rss-feeds/refs/heads/master/recommended/with_category/Business%20%26%20Economy.opml",
+        "https://raw.githubusercontent.com/plenaryapp/awesome-rss-feeds/refs/heads/master/recommended/with_category/Personal%20finance.opml"
+      ]
+    },
+    "add": [
+      {
+        "title": "OpenAI News",
+        "xmlUrl": "https://openai.com/news/rss.xml",
+        "category": "AI"
+      },
+      {
+        "title": "Chrome for Developers",
+        "xmlUrl": "https://developer.chrome.com/static/blog/feed.xml",
+        "category": "Chrome"
+      },
+      {
+        "title": "A VC",
+        "xmlUrl": "https://feeds.feedblitz.com/avcfeed",
+        "category": "Investing"
+      },
+      {
+        "title": "Paul Graham Essays",
+        "xmlUrl": "https://www.aaronsw.com/2002/feeds/pgessays.rss",
+        "category": "Investing"
+      },
+      {
+        "title": "CNBC",
+        "xmlUrl": "https://www.cnbc.com/?format=rss",
+        "category": "Markets"
+      },
+      {
+        "title": "财富中文网",
+        "xmlUrl": "https://plink.anyfeeder.com/fortunechina/shangye",
+        "category": "Startups"
+      },
+      {
+        "title": "商界新闻",
+        "xmlUrl": "https://plink.anyfeeder.com/jiemian/business",
+        "category": "Startups"
+      }
+    ],
+    "block": [
+      {
+        "xmlUrl": "https://dev.to/feed"
+      },
+      {
+        "xmlUrl": "https://github.com/openclaw/openclaw/commits/main.atom"
+      }
+    ],
+    "block_domains": [
+      "*.proceedings.mlr.press",
+      "*.youtube.com"
+    ]
+  }
+}

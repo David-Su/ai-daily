@@ -1,0 +1,16 @@
+.git
+.idea
+.vscode
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+*.log
+.DS_Store
+.env
+news-data
+dist
+build
+htmlcov
+.coverage
