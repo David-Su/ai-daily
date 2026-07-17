@@ -32,6 +32,23 @@ def compact_json(data) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
 
+def _count_digest_tokens(prompt: str) -> int:
+    """使用 tiktoken 统计完整 digest prompt 的 token 数。"""
+    import tiktoken
+
+    return len(tiktoken.get_encoding("o200k_base").encode(prompt))
+
+
+def _digest_entry_removal_key(entry: Dict) -> Tuple[str, float]:
+    """按最早发布时间、最低分数确定超额时的移除顺序。"""
+    published = str(entry.get("published") or entry.get("fetched_at") or "")
+    try:
+        score = float(entry.get("score") or 0)
+    except (TypeError, ValueError):
+        score = 0
+    return published, score
+
+
 def load_prompt(prompt_path: str, **kwargs) -> str:
     """加载提示词模板并填充变量"""
     path = Path(prompt_path)
@@ -557,8 +574,6 @@ async def compose_digest(
     if not prompt_path:
         raise ValueError(f"未配置 domain={domain or ''} 的 digest prompt")
 
-    new_entries = _get_push_prompt_entries(entries)
-
     # context 只保留必要字段，拼接成字符串
     context_text = []
     for c in context:
@@ -571,14 +586,42 @@ async def compose_digest(
             f"summary: {c.get('summary', '')}"
         )
 
-    prompt = load_prompt(
-        prompt_path,
-        count=len(new_entries),
-        entries=compact_json(new_entries),
-        context="\n\n".join(context_text),
-        recent_push_context=recent_push_context,
-        date=datetime.now().strftime("%Y-%m-%d"),
-    )
+    # 裁剪字符数
+    digest_entries = list(entries)
+    original_entry_count = len(digest_entries)
+    max_input_tokens = int(config.get("digest_max_input_tokens", 20000))
+
+    while True:
+        new_entries = _get_push_prompt_entries(digest_entries)
+        prompt = load_prompt(
+            prompt_path,
+            count=len(new_entries),
+            entries=compact_json(new_entries),
+            context="\n\n".join(context_text),
+            recent_push_context=recent_push_context,
+            date=datetime.now().strftime("%Y-%m-%d"),
+        )
+
+        input_tokens = _count_digest_tokens(prompt)
+        if input_tokens <= max_input_tokens:
+            break
+
+        if not digest_entries:
+            raise ValueError(
+                f"digest prompt 超过 token 上限: {max_input_tokens}"
+            )
+
+        digest_entries.remove(
+            min(digest_entries, key=_digest_entry_removal_key)
+        )
+
+    removed_entry_count = original_entry_count - len(digest_entries)
+    if removed_entry_count:
+        print(
+            f"✂️ [{domain or 'digest'}] token裁剪 | 上限: {max_input_tokens}, "
+            f"最终: {input_tokens}, 保留: {len(digest_entries)} 条, "
+            f"移除: {removed_entry_count} 条"
+        )
 
     try:
         return await call_llm(prompt, config)

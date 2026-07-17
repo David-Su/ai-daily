@@ -449,6 +449,7 @@ async def test_digest_step_with_fake_llm(monkeypatch):
         assert "recent item" in prompt
         return "# Digest\n\n- Ready"
 
+    monkeypatch.setattr(llm_module, "_count_digest_tokens", lambda prompt: 0)
     monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
 
     content = await compose_digest(

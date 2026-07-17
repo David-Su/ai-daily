@@ -9,3 +9,4 @@ pytest-asyncio>=0.21.0
 pytest-mock>=3.10.0
 python-dotenv>=1.0.0
 rapidfuzz>=3.13.0
+tiktoken>=0.13.0
