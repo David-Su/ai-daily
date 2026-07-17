@@ -459,13 +459,15 @@ async def run_push_job(config: Dict):
 
         await send_to_platforms(push_content, config["push"], title=f"AI Daily 资讯汇总")
 
-        push_file = get_push_file(domain=domain)
+        push_time = now_local(config)
+        push_file = get_push_file(push_time=push_time, domain=domain)
         save_push_file(
             push_file,
             push_content,
             len(to_push),
             len(to_push),
             domain=domain,
+            push_time=push_time,
         )
         print(f"💾 [{domain}] 已保存到 {push_file}")
 

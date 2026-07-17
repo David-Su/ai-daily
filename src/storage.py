@@ -25,9 +25,9 @@ def get_fetch_file(d: date = None, data_dir: str = "news-data") -> str:
 def get_push_file(
     push_time: datetime = None, data_dir: str = "news-data", domain: str = None
 ) -> str:
-    """生成push文件路径"""
+    """生成使用配置时区的 push 文件路径。"""
     if push_time is None:
-        push_time = datetime.now()
+        push_time = datetime.now(get_timezone())
     time_str = push_time.strftime("%Y-%m-%d-%H-%M-%S")
     filename = f"push-{time_str}.md"
     domain_dir = domain or DEFAULT_PUSH_DOMAIN
@@ -260,7 +260,7 @@ def get_last_push_file(data_dir: str = "news-data", domain: str = None) -> Optio
 
 
 def extract_push_time(filepath: str) -> Optional[datetime]:
-    """从push文件名提取时间"""
+    """从使用配置时区生成的 push 文件名提取时间。"""
     try:
         basename = Path(filepath).name
         match = re.match(
@@ -441,12 +441,14 @@ def save_push_file(
     source_count: int,
     total_entries: int,
     domain: str = None,
+    push_time: datetime = None,
 ):
     """保存推送文件（Markdown格式）"""
     path = Path(filepath)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    push_time = datetime.now(get_timezone())
+    if push_time is None:
+        push_time = datetime.now(get_timezone())
     frontmatter_lines = [
         "---",
         f'pushDate: "{push_time.isoformat()}"',
