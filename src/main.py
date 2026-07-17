@@ -3,7 +3,6 @@
 import asyncio
 import os
 import sys
-import pandas as pd
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -68,14 +67,17 @@ def format_fuzzy_dedupe_details(pairs: list[dict]) -> str:
     if not pairs:
         return ""
 
-    rows = [
-        {
-            "排除链接": pair.get("new", ""),
-            "比对链接": pair.get("old", ""),
-        }
-        for pair in pairs
+    headers = ("排除链接", "比对链接")
+    rows = [(str(pair.get("new", "")), str(pair.get("old", ""))) for pair in pairs]
+    widths = [
+        max(len(header), *(len(row[index]) for row in rows))
+        for index, header in enumerate(headers)
     ]
-    return pd.DataFrame(rows).to_string(index=False)
+
+    def format_row(row: tuple[str, str]) -> str:
+        return "  ".join(value.ljust(widths[index]) for index, value in enumerate(row))
+
+    return "\n".join((format_row(headers), *(format_row(row) for row in rows)))
 
 
 async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
