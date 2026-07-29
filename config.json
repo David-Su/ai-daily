@@ -32,7 +32,7 @@
   "llm": {
     "provider": "openai",
     "model": "gpt-5.6-luna",
-    "baseUrl": "https://www.right.codes/codex/v1",
+    "baseUrl": "https://www.rightapi.ai/codex/v1",
     "apiKeyName": "RIGHT_CODE_API_KEY",
     "max_prompt_chars": 64000,
     "digest_max_input_tokens": 800000,
