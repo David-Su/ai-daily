@@ -35,7 +35,7 @@
     "baseUrl": "https://www.rightapi.ai/codex/v1",
     "apiKeyName": "RIGHT_CODE_API_KEY",
     "max_prompt_chars": 64000,
-    "digest_max_input_tokens": 500000,
+    "digest_max_input_tokens": 450000,
     "max_concurrent_batches": 3,
     "max_retries": 3,
     "prompts": {
