@@ -10,7 +10,7 @@ from src.storage import extract_push_time, get_push_file, save_push_file
 
 
 def _configured_timezone():
-    return get_timezone(load_config(str(ROOT / "config.json")))
+    return get_timezone(load_config(str(ROOT / "config.yaml")))
 
 
 def test_push_filename_and_frontmatter_use_the_same_configured_timezone(tmp_path):

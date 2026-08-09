@@ -10,7 +10,7 @@ AI Daily 使用两个长期运行的异步循环：
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│                     Config (config.json)                     │
+│                     Config (config.yaml)                     │
 ├──────────────────────────────────────────────────────────────┤
 │ sources        filter        schedule       llm/prompts/push │
 │ base_opml      min_score     fetch interval domain prompts   │
@@ -64,7 +64,7 @@ flowchart LR
 
 职责：
 
-- 加载 `.env` 和 `config.json`
+- 加载 `.env` 和 `config.yaml`
 - 启动前调用 `check_llm_available()` 检查 LLM 可用性
 - 并发启动 `fetch_loop()` 和 `push_loop()`
 - 统一处理 LLM 异常通知
@@ -256,75 +256,88 @@ platforms = {
 
 ## 配置详解
 
-当前 `config.json` 顶层结构：
+配置文件是根目录的 `config.yaml`，由 `load_config()` 用 `yaml.safe_load()` 读取。顶层结构：
 
-```json
-{
-  "filter": {
-    "min_score": 60,
-    "hot_threshold": 90,
-    "context_days": 2,
-    "keep_days": 7,
-    "push_context_days": 5,
-    "no_content_marker": "[NO_NEW_CONTENT]"
-  },
-  "schedule": {
-    "fetch_interval_minutes": 30,
-    "fetch_lookback_minutes": 120,
-    "push_cron": ["0 8 * * *", "40 16 * * *"],
-    "timezone_hours": 8
-  },
-  "fetch": {
-    "max_workers": 10,
-    "timeout": 10
-  },
-  "llm": {
-    "provider": "openai",
-    "model": "qwen3.5-flash",
-    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "apiKeyName": "OPENAI_API_KEY",
-    "max_prompt_chars": 20000,
-    "max_concurrent_batches": 2,
-    "max_retries": 3,
-    "prompts": {
-      "domain": {
-        "activity_domains": ["AI", "Investment"],
-        "domains": [
-          {
-            "key": "AI",
-            "score_standard": "prompts/score/ai/score_standard.md",
-            "digest": "prompts/digest/ai/digest.md",
-            "immediate_push": "prompts/immediate/ai/immediate_push.md"
-          },
-          {
-            "key": "Investment",
-            "score_standard": "prompts/score/investment/score_standard.md",
-            "digest": "prompts/digest/investment/digest.md",
-            "immediate_push": "prompts/immediate/investment/immediate_push.md"
-          }
-        ]
-      },
-      "score_batch": "prompts/score/score_batch.md"
-    }
-  },
-  "push": {
-    "discord": {
-      "enabled": false,
-      "apiKeyName": "DISCORD_WEBHOOK_URL"
-    },
-    "feishu": {
-      "enabled": false,
-      "apiKeyName": "FEISHU_WEBHOOK_URL"
-    },
-    "gmail": {
-      "enabled": true,
-      "usernameKeyName": "GMAIL_USERNAME",
-      "passwordKeyName": "GMAIL_APP_PASSWORD",
-      "toKeyName": "GMAIL_TO",
-      "fromName": "AI Daily"
-    }
-  }
-}
+```yaml
+filter:
+  min_score: 60
+  hot_threshold: 90
+  context_days: 2
+  keep_days: 7
+  push_context_days: 5
+  no_content_marker: "[NO_NEW_CONTENT]"
+
+dedupe:
+  fuzzy_enabled: false
+  content_threshold: 90
+
+schedule:
+  fetch_interval_minutes: 120
+  fetch_lookback_minutes: 180
+  push_cron:
+    - "30 9 * * *"
+  hot_push_block_periods:
+    - ["01:00", "09:31"]
+  timezone_hours: 8
+
+fetch:
+  max_workers: 10
+  timeout: 10
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  baseUrl: https://www.rightapi.ai/codex/v1
+  apiKeyName: RIGHT_CODE_API_KEY
+  max_prompt_chars: 64000
+  digest_max_input_tokens: 450000
+  max_concurrent_batches: 3
+  max_retries: 3
+  prompts:
+    domain:
+      activity_domains:
+        - AI
+        - Investment
+      domains:
+        - key: AI
+          score_standard: prompts/score/ai/score_standard.md
+          digest: prompts/digest/ai/digest.md
+          immediate_push: prompts/immediate/ai/immediate_push.md
+        - key: Investment
+          score_standard: prompts/score/investment/score_standard.md
+          digest: prompts/digest/investment/digest.md
+          immediate_push: prompts/immediate/investment/immediate_push.md
+    score_batch: prompts/score/score_batch.md
+push:
+  discord:
+    enabled: false
+    apiKeyName: DISCORD_WEBHOOK_URL
+  feishu:
+    enabled: false
+    apiKeyName: FEISHU_WEBHOOK_URL
+  gmail:
+    enabled: true
+    usernameKeyName: GMAIL_USERNAME
+    passwordKeyName: GMAIL_APP_PASSWORD
+    toKeyName: GMAIL_TO
+    fromName: AI Daily
+
+sources:
+  base_opml: resources/rss.opml
+  sync:                 # 每周拉取远端 OPML 覆盖 base_opml
+    enabled: true
+    cron: "0 4 * * 0"
+    backup: true
+    timeout: 30
+    urls:
+      - https://raw.githubusercontent.com/.../feeds.opml
+  add:                  # 自定义补充源
+    - title: OpenAI News
+      xmlUrl: https://openai.com/news/rss.xml
+      category: AI
+  block:                # 按 xmlUrl 屏蔽
+    - xmlUrl: https://dev.to/feed
+  block_domains:        # 按域名屏蔽，支持 *.example.com
+    - "*.youtube.com"
 ```
 
 ### 环境变量
@@ -374,7 +387,7 @@ ai-daily/
 │   ├── fetch-*.json
 │   ├── notify/<domain>/notify-*.md
 │   └── push/<domain>/push-*.md
-├── config.json
+├── config.yaml
 ├── requirements.txt
 ├── Dockerfile
 └── docker-compose.yml
@@ -394,12 +407,12 @@ ai-daily/
 1. 新增评分标准文件，例如 `prompts/score/<domain>/score_standard.md`。
 2. 新增摘要 prompt，例如 `prompts/digest/<domain>/digest.md`。
 3. 新增即时推送 prompt，例如 `prompts/immediate/<domain>/immediate_push.md`。
-4. 在 `config.json` 的 `llm.prompts.domain.domains` 中添加配置。
+4. 在 `config.yaml` 的 `llm.prompts.domain.domains` 中添加配置。
 5. 在 `llm.prompts.domain.activity_domains` 中启用该 domain。
 
 ### 添加新源
 
-编辑 `config.json` 的 `sources.add` 列表。需要屏蔽源时优先使用 `sources.block` 或 `sources.block_domains`，避免直接改 OPML。
+编辑 `config.yaml` 的 `sources.add` 列表。需要屏蔽源时优先使用 `sources.block` 或 `sources.block_domains`，避免直接改 OPML。
 
 ## 测试指南
 
@@ -407,7 +420,7 @@ ai-daily/
 pytest tests/test_flow.py -v
 ```
 
-`tests/test_flow.py` 默认读取根目录 `config.json`，保持测试和真实配置接口一致。它覆盖主流程中的主要步骤：
+`tests/test_flow.py` 默认读取根目录 `config.yaml`，保持测试和真实配置接口一致。它覆盖主流程中的主要步骤：
 
 | 步骤 | 测试内容 |
 |------|----------|
@@ -416,7 +429,7 @@ pytest tests/test_flow.py -v
 | LLM 评分 | 使用 fake LLM 返回 JSON，验证评分、domain、summary 合并 |
 | Digest | 使用 fake LLM 验证 domain digest prompt 可调用 |
 | 存储和筛选 | 写入临时 fetch 文件，再按分数、domain、时间筛出待推送和上下文 |
-| 推送 | 基于 `config.json` 的 Gmail 配置构建邮件消息，不发送真实邮件 |
+| 推送 | 基于 `config.yaml` 的 Gmail 配置构建邮件消息，不发送真实邮件 |
 
 真实服务测试默认关闭。需要调试时直接改 `tests/test_flow.py` 顶部变量：
 

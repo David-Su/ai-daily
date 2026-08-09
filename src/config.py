@@ -1,11 +1,12 @@
 """配置加载和源管理"""
 import fnmatch
-import json
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List
 from urllib.parse import urlparse
+
+import yaml
 
 
 def _get_local_timezone() -> timezone:
@@ -33,14 +34,14 @@ def get_timezone(config: Dict = None) -> timezone:
     return timezone(timedelta(hours=hours))
 
 
-def load_config(config_path: str = "config.json") -> Dict:
-    """加载配置文件"""
+def load_config(config_path: str = "config.yaml") -> Dict:
+    """加载 YAML 配置文件"""
     path = Path(config_path)
     if not path.exists():
         raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return yaml.safe_load(f) or {}
 
 
 def parse_opml(opml_path: str) -> List[Dict]:

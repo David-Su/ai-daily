@@ -40,7 +40,7 @@ from src.storage import (
 
 
 # 调试开关：需要访问真实 RSS、LLM 或推送服务时，直接把对应值改成 True。
-CONFIG_PATH = ROOT / "config.json"
+CONFIG_PATH = ROOT / "config.yaml"
 DEBUG_DOMAIN = ""
 REAL_SOURCE_LIMIT = 3
 REAL_FETCH_MINUTES = 120
@@ -51,7 +51,7 @@ RUN_REAL_PUSH = False
 
 
 def _config():
-    """读取真实 config.json，确保测试始终贴着当前配置接口走。"""
+    """读取真实 config.yaml，确保测试始终贴着当前配置接口走。"""
     return load_config(str(CONFIG_PATH))
 
 
@@ -94,7 +94,7 @@ def _sample_entries(domain):
 
 
 def test_config_interface_and_prompt_files():
-    """验证 config.json 的主接口存在，并检查当前启用 domain 的 prompt 文件都可访问。"""
+    """验证 config.yaml 的主接口存在，并检查当前启用 domain 的 prompt 文件都可访问。"""
     config = _config()
 
     for key in ["sources", "filter", "schedule", "fetch", "llm", "push"]:
@@ -714,7 +714,7 @@ def test_rapidfuzz_content_dedupe_detects_near_duplicate():
 
 
 def test_push_message_can_be_built_from_config(monkeypatch):
-    """基于 config.json 的 Gmail 配置构建邮件消息，只验证格式，不发送真实邮件。"""
+    """基于 config.yaml 的 Gmail 配置构建邮件消息，只验证格式，不发送真实邮件。"""
     config = _config()
     gmail_config = dict(config["push"]["gmail"])
     gmail_config["enabled"] = True

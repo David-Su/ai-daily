@@ -40,7 +40,7 @@ pip install -r requirements.txt
 
 ### 3. 配置环境变量
 
-在项目根目录创建 `.env` 文件。默认 `config.json` 使用 OpenAI 兼容接口，并从 `OPENAI_API_KEY` 读取密钥：
+在项目根目录创建 `.env` 文件。默认 `config.yaml` 使用 OpenAI 兼容接口，并从 `OPENAI_API_KEY` 读取密钥：
 
 ```bash
 # LLM API（OpenAI API 兼容接口）
@@ -58,61 +58,50 @@ GMAIL_TO=receiver@example.com
 # FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
 ```
 
-如果你使用 OpenRouter、OpenAI 或其他兼容服务，只需要同步修改 `config.json` 中的 `llm.baseUrl`、`llm.model` 和 `llm.apiKeyName`。
+如果你使用 OpenRouter、OpenAI 或其他兼容服务，只需要同步修改 `config.yaml` 中的 `llm.baseUrl`、`llm.model` 和 `llm.apiKeyName`。
 
 ### 4. 检查配置
 
 当前配置示例：
 
-```json
-{
-  "llm": {
-    "provider": "openai",
-    "model": "qwen3.5-flash",
-    "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "apiKeyName": "OPENAI_API_KEY",
-    "max_prompt_chars": 20000,
-    "max_concurrent_batches": 2,
-    "max_retries": 3,
-    "prompts": {
-      "domain": {
-        "activity_domains": ["AI", "Investment"],
-        "domains": [
-          {
-            "key": "AI",
-            "score_standard": "prompts/score/ai/score_standard.md",
-            "digest": "prompts/digest/ai/digest.md",
-            "immediate_push": "prompts/immediate/ai/immediate_push.md"
-          },
-          {
-            "key": "Investment",
-            "score_standard": "prompts/score/investment/score_standard.md",
-            "digest": "prompts/digest/investment/digest.md",
-            "immediate_push": "prompts/immediate/investment/immediate_push.md"
-          }
-        ]
-      },
-      "score_batch": "prompts/score/score_batch.md"
-    }
-  },
-  "push": {
-    "discord": {
-      "enabled": false,
-      "apiKeyName": "DISCORD_WEBHOOK_URL"
-    },
-    "feishu": {
-      "enabled": false,
-      "apiKeyName": "FEISHU_WEBHOOK_URL"
-    },
-    "gmail": {
-      "enabled": true,
-      "usernameKeyName": "GMAIL_USERNAME",
-      "passwordKeyName": "GMAIL_APP_PASSWORD",
-      "toKeyName": "GMAIL_TO",
-      "fromName": "AI Daily"
-    }
-  }
-}
+```yaml
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  baseUrl: https://www.rightapi.ai/codex/v1
+  apiKeyName: RIGHT_CODE_API_KEY
+  max_prompt_chars: 64000
+  digest_max_input_tokens: 450000
+  max_concurrent_batches: 3
+  max_retries: 3
+  prompts:
+    domain:
+      activity_domains:
+        - AI
+        - Investment
+      domains:
+        - key: AI
+          score_standard: prompts/score/ai/score_standard.md
+          digest: prompts/digest/ai/digest.md
+          immediate_push: prompts/immediate/ai/immediate_push.md
+        - key: Investment
+          score_standard: prompts/score/investment/score_standard.md
+          digest: prompts/digest/investment/digest.md
+          immediate_push: prompts/immediate/investment/immediate_push.md
+    score_batch: prompts/score/score_batch.md
+push:
+  discord:
+    enabled: false
+    apiKeyName: DISCORD_WEBHOOK_URL
+  feishu:
+    enabled: false
+    apiKeyName: FEISHU_WEBHOOK_URL
+  gmail:
+    enabled: true
+    usernameKeyName: GMAIL_USERNAME
+    passwordKeyName: GMAIL_APP_PASSWORD
+    toKeyName: GMAIL_TO
+    fromName: AI Daily
 ```
 
 ### 5. 运行程序
@@ -130,6 +119,8 @@ docker compose up -d --build
 ```
 
 ## 配置详解
+
+配置文件是根目录的 `config.yaml`。
 
 ### sources - 订阅源管理
 
@@ -288,7 +279,7 @@ totalEntries: 8
 pytest tests/test_flow.py -v
 ```
 
-`tests/test_flow.py` 默认读取根目录 `config.json`，覆盖配置接口、RSS 源合并、HTML 转 Markdown、fake LLM 评分、domain digest、存储筛选和 Gmail 邮件构建。
+`tests/test_flow.py` 默认读取根目录 `config.yaml`，覆盖配置接口、RSS 源合并、HTML 转 Markdown、fake LLM 评分、domain digest、存储筛选和 Gmail 邮件构建。
 
 真实 RSS、LLM 和推送调试默认关闭。需要调试时直接修改 `tests/test_flow.py` 顶部开关：
 
@@ -304,24 +295,18 @@ DEBUG_DOMAIN = "AI"
 
 ### 添加 RSS 源
 
-```json
-"sources": {
-  "base_opml": "resources/rss.opml",
-  "sync": {
-    "enabled": true,
-    "cron": "0 4 * * 0",
-    "urls": [
-      "https://raw.githubusercontent.com/JackyST0/awesome-rsshub-routes/main/feeds.opml"
-    ]
-  },
-  "add": [
-    {
-      "title": "OpenAI News",
-      "xmlUrl": "https://openai.com/news/rss.xml",
-      "category": "AI"
-    }
-  ]
-}
+```yaml
+sources:
+  base_opml: resources/rss.opml
+  sync:
+    enabled: true
+    cron: "0 4 * * 0"
+    urls:
+      - https://raw.githubusercontent.com/JackyST0/awesome-rsshub-routes/main/feeds.opml
+  add:
+    - title: OpenAI News
+      xmlUrl: https://openai.com/news/rss.xml
+      category: AI
 ```
 
 ### 添加新的领域
@@ -329,7 +314,7 @@ DEBUG_DOMAIN = "AI"
 1. 在 `prompts/score/<domain>/score_standard.md` 写评分标准。
 2. 在 `prompts/digest/<domain>/digest.md` 写该领域的汇总 prompt。
 3. 在 `prompts/immediate/<domain>/immediate_push.md` 写该领域的即时推送 prompt。
-4. 在 `config.json` 的 `llm.prompts.domain.domains` 增加 `{key, score_standard, digest, immediate_push}`。
+4. 在 `config.yaml` 的 `llm.prompts.domain.domains` 增加 `{key, score_standard, digest, immediate_push}`。
 5. 把 `key` 加入 `llm.prompts.domain.activity_domains`。
 
 ### 添加新的推送平台
@@ -406,7 +391,7 @@ ai-daily/
 │   └── test_flow.py
 ├── resources/
 │   └── rss.opml
-├── config.json
+├── config.yaml
 ├── docker-compose.yml
 ├── Dockerfile
 └── requirements.txt

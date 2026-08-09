@@ -11,6 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src ./src
 COPY prompts ./prompts
 COPY resources ./resources
-COPY config.json ./config.json
+COPY config.yaml ./config.yaml
 
 CMD ["python", "-m", "src.main"]
