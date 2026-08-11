@@ -1,6 +1,7 @@
 """AI每日资讯推送系统 - 主程序"""
 
 import asyncio
+import logging
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -15,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from croniter import croniter
 
-from src.config import get_timezone, load_config, merge_sources
+from src.config import get_config, get_timezone, initialize_config, merge_sources
 from src.fetcher import fetch_all_feeds
 from src.llm import (
     check_llm_available,
@@ -25,7 +26,7 @@ from src.llm import (
 )
 from src.processor import html_to_markdown
 from src.push import send_to_platforms
-from src.source_sync import DEFAULT_SOURCE_SYNC_CRON, sync_opml_sources
+from src.source_sync import sync_opml_sources
 from src.storage import (
     add_entry_dedupe_keys,
     append_entries,
@@ -40,6 +41,7 @@ from src.storage import (
     load_existing_dedupe_keys,
     load_recent_notify_titles,
     load_recent_push_titles,
+    load_recent_push_titles_for_immediate_push,
     read_entries,
     save_notify_file,
     save_push_file,
@@ -48,18 +50,13 @@ from src.storage import (
 DEFAULT_PUSH_DOMAIN = "未分类"
 
 
-def is_immediate_push_forbidden(config: Dict) -> bool:
-    block_periods = config["schedule"]["hot_push_block_periods"]
-    if not block_periods:
-        return False
-    curr_time = now_local(config).time()
-    for period in block_periods:
-        start_txt, end_txt = period
-        start_time = datetime.strptime(start_txt, "%H:%M").time()
-        end_time = datetime.strptime(end_txt, "%H:%M").time()
-        if start_time <= curr_time < end_time:
-            return True
-    return False
+def is_immediate_push_forbidden() -> bool:
+    config = get_config()
+    curr_time = now_local().time()
+    return any(
+        start <= curr_time < end
+        for start, end in config.schedule.hot_push_block_periods
+    )
 
 
 def format_fuzzy_dedupe_details(pairs: list[dict]) -> str:
@@ -80,7 +77,7 @@ def format_fuzzy_dedupe_details(pairs: list[dict]) -> str:
     return "\n".join((format_row(headers), *(format_row(row) for row in rows)))
 
 
-async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
+async def notify_llm_errors(stage: str, errors: List[str]):
     """发送简单的 LLM 异常通知"""
     if not errors:
         return
@@ -89,7 +86,7 @@ async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
         "## LLM异常",
         "",
         f"stage: {stage}",
-        f"time: {now_local(config).strftime('%Y-%m-%d %H:%M:%S')}",
+        f"time: {now_local().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
     ]
     lines.extend(f"- {error}" for error in errors)
@@ -98,21 +95,21 @@ async def notify_llm_errors(stage: str, errors: List[str], config: Dict):
         print(f"⚠️ LLM异常 推送到平台")
         content = "\n".join(lines)
         # print(content)
-        await send_to_platforms("\n".join(lines), config["push"], title="AI Daily 异常警报")
+        await send_to_platforms("\n".join(lines), title="AI Daily 异常警报")
     except Exception as e:
         print(f"⚠️ LLM异常通知发送失败: {e}")
 
 
-def now_local(config: Dict = None) -> datetime:
+def now_local() -> datetime:
     """获取配置时区的当前时间"""
-    return datetime.now(get_timezone(config))
+    return datetime.now(get_timezone())
 
 
-def parse_time_to_local(time_str: str, config: Dict = None) -> Optional[datetime]:
+def parse_time_to_local(time_str: str) -> Optional[datetime]:
     """解析时间字符串为配置时区的datetime"""
     try:
         dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
-        return dt.astimezone(get_timezone(config))
+        return dt.astimezone(get_timezone())
     except (ValueError, TypeError):
         return None
 
@@ -123,36 +120,32 @@ def normalize_entry_domain(entry: Dict) -> str:
     return domain or DEFAULT_PUSH_DOMAIN
 
 
-def get_domain_order(config: Dict) -> List[str]:
+def get_domain_order() -> List[str]:
     """从配置读取 domain 顺序，用于稳定推送顺序。"""
-    domain_config = (
-        config.get("llm", {}).get("prompts", {}).get("domain", {})
-        if config
-        else {}
-    )
-    active_domains = domain_config.get("activity_domains", [])
-    configured_domains = [
-        item.get("key") for item in domain_config.get("domains", []) if item.get("key")
-    ]
+    config = get_config()
+    domain_config = config.llm.prompts.domain
+    configured_domains = [item.key for item in domain_config.domains]
 
     order = []
-    for domain in active_domains + configured_domains + [DEFAULT_PUSH_DOMAIN]:
-        if domain and domain not in order:
+    for domain in [
+        *domain_config.activity_domains,
+        *configured_domains,
+        DEFAULT_PUSH_DOMAIN,
+    ]:
+        if domain not in order:
             order.append(domain)
     return order
 
 
-def sort_domains(domains: List[str], config: Dict) -> List[str]:
+def sort_domains(domains: List[str]) -> List[str]:
     """按配置顺序排列 domain，其余 domain 放在最后。"""
-    order = get_domain_order(config)
+    order = get_domain_order()
     order_index = {domain: index for index, domain in enumerate(order)}
     return sorted(domains, key=lambda d: (order_index.get(d, len(order_index)), d))
 
 
-def calculate_push_times(
-        cron_list: List[str], offset_days: int = 0, config: Dict = None
-) -> List[datetime]:
-    base_date = datetime.now(get_timezone(config)).date() + timedelta(days=offset_days)
+def calculate_push_times(cron_list: List[str], offset_days: int = 0) -> List[datetime]:
+    base_date = datetime.now(get_timezone()).date() + timedelta(days=offset_days)
     times = []
     for cron in cron_list:
         try:
@@ -160,7 +153,7 @@ def calculate_push_times(
             t = datetime.combine(
                 base_date,
                 datetime.strptime(f"{hour}:{minute}", "%H:%M").time(),
-                tzinfo=get_timezone(config),
+                tzinfo=get_timezone(),
             )
             times.append(t)
         except ValueError:
@@ -168,14 +161,12 @@ def calculate_push_times(
     return sorted(times)
 
 
-def collect_entries_for_domain_pushes(
-        context_days: int = 2,
-        min_score: int = 60,
-        data_dir: str = "news-data",
-        config: Dict = None,
-) -> Dict[str, Dict]:
+def collect_entries_for_domain_pushes(data_dir: str = "news-data") -> Dict[str, Dict]:
     """按 domain 收集推送条目，返回每个 domain 独立的待推送与上下文。"""
-    tz = get_timezone(config)
+    config = get_config()
+    context_days = config.filter.context_days
+    min_score = config.filter.min_score
+    tz = get_timezone()
     now = datetime.now(tz)
     today = now.date()
 
@@ -211,7 +202,7 @@ def collect_entries_for_domain_pushes(
         to_push = []
         context = []
         for entry in entries:
-            entry_time = parse_time_to_local(entry.get("fetched_at", ""), config)
+            entry_time = parse_time_to_local(entry.get("fetched_at", ""))
             if entry_time and entry_time > push_cutoff:
                 to_push.append(entry)
             else:
@@ -228,29 +219,25 @@ def collect_entries_for_domain_pushes(
     return domain_pushes
 
 
-async def run_fetch_job(config: Dict):
+async def run_fetch_job():
+    config = get_config()
     print(f"\n{'=' * 50}")
     print(f"🔄 Fetch Job | {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 50}")
 
-    interval = config["schedule"]["fetch_interval_minutes"]
-    lookback = config["schedule"].get("fetch_lookback_minutes", 120)
-    lookback = max(lookback, interval)
+    interval = config.schedule.fetch_interval_minutes
+    lookback = config.schedule.fetch_lookback_minutes
     threshold = lookback + interval
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=lookback)
 
-    sources = merge_sources(config["sources"])
+    sources = merge_sources()
     print(f"📂 共 {len(sources)} 个订阅源")
 
     if not sources:
         print("⚠️ 没有可用的订阅源")
         return
 
-    max_workers = config.get("fetch", {}).get("max_workers", 20)
-    timeout = config.get("fetch", {}).get("timeout", 30)
-    entries = await fetch_all_feeds(
-        sources, cutoff, max_workers=max_workers, timeout=timeout
-    )
+    entries = await fetch_all_feeds(sources, cutoff)
     print(f"📥 抓取到 {len(entries)} 条原始消息")
 
     if not entries:
@@ -265,9 +252,8 @@ async def run_fetch_job(config: Dict):
 
     existing_keys = load_existing_dedupe_keys(fetch_file, threshold)
 
-    dedupe_config = config.get("dedupe", {})
-    fuzzy_enabled = dedupe_config.get("fuzzy_enabled", True)
-    content_threshold = dedupe_config.get("content_threshold", 95)
+    fuzzy_enabled = config.dedupe.fuzzy_enabled
+    content_threshold = config.dedupe.content_threshold
 
     existing_count = len(existing_keys)
     exact_duplicate_count = 0
@@ -305,25 +291,25 @@ async def run_fetch_job(config: Dict):
     for entry in new_entries:
         if isinstance(entry.get("published"), datetime):
             entry["published"] = (
-                entry["published"].astimezone(get_timezone(config)).isoformat()
+                entry["published"].astimezone(get_timezone()).isoformat()
             )
 
-    scored = await score_batch(new_entries, config["llm"])
+    scored = await score_batch(new_entries)
 
     # 筛选出符合domain要求的entry,llm已经只输出domain在activity_domains中的元素,保险起见再清理一遍
-    activity_domains = set(config["llm"]["prompts"]["domain"]["activity_domains"])
+    activity_domains = set(config.llm.prompts.domain.activity_domains)
     scored = [entry for entry in scored if entry["domain"] in activity_domains]
 
     is_new_file = not os.path.exists(fetch_file)
     if is_new_file:
-        cleanup_old_files(days=config["filter"]["keep_days"])
+        cleanup_old_files(days=config.filter.keep_days)
 
     # 添加 fetched_at 时间戳
     for entry in scored:
         entry["fetched_at"] = now_local().isoformat()
         if isinstance(entry.get("published"), datetime):
             entry["published"] = (
-                entry["published"].astimezone(get_timezone(config)).isoformat()
+                entry["published"].astimezone(get_timezone()).isoformat()
             )
 
     meta = {"date": date.today().isoformat()}
@@ -331,10 +317,10 @@ async def run_fetch_job(config: Dict):
 
     print(f"💾 已保存到 {fetch_file}")
 
-    hot_threshold = config["filter"]["hot_threshold"]
-    no_content_marker = config["filter"].get("no_content_marker", "[NO_NEW_CONTENT]")
+    hot_threshold = config.filter.hot_threshold
+    no_content_marker = config.filter.no_content_marker
     hot_entries = [e for e in scored if (e.get("score") or 0) >= hot_threshold]
-    if hot_entries and is_immediate_push_forbidden(config):
+    if hot_entries and is_immediate_push_forbidden():
         print(f"⏰ 当前时间处于即时推送禁止时间段, 跳过即时推送")
     elif hot_entries:
         hot_entries_by_domain: Dict[str, List[Dict]] = {}
@@ -348,14 +334,12 @@ async def run_fetch_job(config: Dict):
         )
 
         # 加载近期已推送事件清单（仅供 LLM 查重，避免风格趋同）
-        context_days = config["filter"]["context_days"]
-
-        for domain in sort_domains(list(hot_entries_by_domain.keys()), config):
+        for domain in sort_domains(list(hot_entries_by_domain.keys())):
             domain_hot_entries = hot_entries_by_domain[domain]
             print(f"🤖 [{domain}] 生成即时快讯 | 热点: {len(domain_hot_entries)} 条")
 
-            recent_notify = load_recent_notify_titles(context_days, domain=domain)
-            recent_push = load_recent_push_titles(context_days, domain=domain)
+            recent_notify = load_recent_notify_titles(domain=domain)
+            recent_push = load_recent_push_titles_for_immediate_push(domain=domain)
             recent_context = (
                 f"=== 近期即时推送事件 ===\n{recent_notify}\n\n"
                 f"=== 近期汇总推送事件 ===\n{recent_push}"
@@ -363,7 +347,6 @@ async def run_fetch_job(config: Dict):
 
             push_content, immediate_push_error = await generate_immediate_push(
                 domain_hot_entries,
-                config["llm"],
                 recent_push_context=recent_context,
                 domain=domain,
             )
@@ -372,7 +355,6 @@ async def run_fetch_job(config: Dict):
                 await notify_llm_errors(
                     f"generate_immediate_push:{domain}",
                     [immediate_push_error],
-                    config,
                 )
 
             if not push_content:
@@ -383,9 +365,7 @@ async def run_fetch_job(config: Dict):
             if no_content_marker in push_content:
                 print(f"ℹ️ [{domain}] 无新内容需要推送 (LLM判定为重复内容)")
             else:
-                await send_to_platforms(
-                    push_content, config["push"], title=f"AI Daily 快讯"
-                )
+                await send_to_platforms(push_content, title="AI Daily 快讯")
                 # 保存即时推送内容到notify文件
                 notify_file = get_notify_file(domain=domain)
                 save_notify_file(notify_file, push_content, domain=domain)
@@ -394,19 +374,14 @@ async def run_fetch_job(config: Dict):
     print(f"✅ Fetch Job 完成 | 新消息: {len(scored)} 条 | 热点: {len(hot_entries)} 条")
 
 
-async def run_push_job(config: Dict):
+async def run_push_job():
+    config = get_config()
     print(f"\n{'=' * 50}")
     print(f"📤 Push Job | {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 50}")
 
-    min_score = config["filter"]["min_score"]
-    context_days = config["filter"]["context_days"]
-
-    domain_pushes = collect_entries_for_domain_pushes(
-        context_days=context_days,
-        min_score=min_score,
-        config=config,
-    )
+    min_score = config.filter.min_score
+    domain_pushes = collect_entries_for_domain_pushes()
 
     total_to_push = sum(len(group["to_push"]) for group in domain_pushes.values())
     total_context = sum(len(group["context"]) for group in domain_pushes.values())
@@ -421,11 +396,10 @@ async def run_push_job(config: Dict):
 
     print(f"✅ 符合推送标准(≥{min_score}分): {total_to_push} 条")
 
-    push_context_days = config["filter"].get("push_context_days", 5)
     pushed_domains = 0
     pushed_entries = 0
 
-    for domain in sort_domains(list(domain_pushes.keys()), config):
+    for domain in sort_domains(list(domain_pushes.keys())):
         group = domain_pushes[domain]
         to_push = group["to_push"]
         context = group["context"]
@@ -439,29 +413,26 @@ async def run_push_job(config: Dict):
             f"🤖 [{domain}] 生成推送内容 | 待推送: {len(to_push)} 条, 上下文: {len(context)} 条"
         )
 
-        recent_push_context_str = load_recent_push_titles(
-            push_context_days, domain=domain
-        )
+        recent_push_context_str = load_recent_push_titles(domain=domain)
         try:
             push_content = await compose_digest(
                 to_push,
                 context,
-                config["llm"],
                 recent_push_context=recent_push_context_str,
                 domain=domain,
             )
         except Exception as e:
             print(f"[{domain}] 生成汇总推送失败: {e}")
-            await notify_llm_errors(f"compose_digest:{domain}", [str(e)], config)
+            await notify_llm_errors(f"compose_digest:{domain}", [str(e)])
             continue
 
         if not push_content.strip():
             print(f"⚠️ [{domain}] 推送内容为空，跳过")
             continue
 
-        await send_to_platforms(push_content, config["push"], title=f"AI Daily 资讯汇总")
+        await send_to_platforms(push_content, title="AI Daily 资讯汇总")
 
-        push_time = now_local(config)
+        push_time = now_local()
         push_file = get_push_file(push_time=push_time, domain=domain)
         save_push_file(
             push_file,
@@ -483,18 +454,19 @@ async def run_push_job(config: Dict):
     print(f"✅ Push Job 完成 | domain: {pushed_domains} 个 | 推送: {pushed_entries} 条")
 
 
-async def fetch_loop(config: Dict):
+async def fetch_loop():
     """Fetch循环 - 修复时间漂移并支持优雅退出"""
     import time
 
-    interval_seconds = config["schedule"]["fetch_interval_minutes"] * 60
+    config = get_config()
+    interval_seconds = config.schedule.fetch_interval_minutes * 60
     print(f"🔄 Fetch循环已启动 | 严格间隔: {interval_seconds / 60}分钟")
 
     while True:
         start_time = time.monotonic()  # 使用 monotonic 避免系统时间修改影响
 
         try:
-            await run_fetch_job(config)
+            await run_fetch_job()
         except asyncio.CancelledError:
             print("⚠️ Fetch循环被外部取消，正在安全退出...")
             break  # 允许外部取消任务
@@ -516,26 +488,14 @@ async def fetch_loop(config: Dict):
             break
 
 
-async def push_loop(config: Dict):
+async def push_loop():
     """Push循环 - 无状态 croniter + 原生异步睡眠"""
-    cron_list = config["schedule"]["push_cron"]
-    tz = get_timezone(config)
-
-    # 1. 启动前预校验 cron 表达式，过滤掉无效配置
-    valid_crons = []
-    for cron in cron_list:
-        if croniter.is_valid(cron):
-            valid_crons.append(cron)
-        else:
-            print(f"⚠️ 忽略无效的 cron 表达式: '{cron}'")
-
-    if not valid_crons:
-        print("❌ 没有有效的推送时间配置，Push循环退出")
-        return
+    config = get_config()
+    valid_crons = config.schedule.push_cron
+    tz = get_timezone()
 
     print(f"📤 Push循环已启动 | 定时: {', '.join(valid_crons)} | 时区: {tz}")
 
-    # 2. 主循环
     while True:
         try:
             now = datetime.now(tz)
@@ -559,7 +519,7 @@ async def push_loop(config: Dict):
 
             # 到达推送时间，执行推送
             print(f"📤 执行推送: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')}")
-            await run_push_job(config)
+            await run_push_job()
 
             # 增加 1 秒缓冲：防止 run_push_job 执行过快（不到 1 秒），
             # 导致下一个循环的 now 仍停留在当前秒，croniter 算出重复的时间点。
@@ -574,12 +534,12 @@ async def push_loop(config: Dict):
             await asyncio.sleep(60)
 
 
-async def run_source_sync_job(config: Dict):
+async def run_source_sync_job():
     print(f"\n{'=' * 50}")
-    print(f"🔁 Source Sync Job | {now_local(config).strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"🔁 Source Sync Job | {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 50}")
 
-    result = await sync_opml_sources(config["sources"])
+    result = await sync_opml_sources()
     if result.updated:
         print(
             f"✅ RSS源列表已更新 | 来源: {result.source_count} 个 | 去重后: {result.feed_count} 个 | 文件: {result.target_path}"
@@ -591,18 +551,14 @@ async def run_source_sync_job(config: Dict):
         print(f"  - {failure}")
 
 
-async def source_sync_loop(config: Dict):
+async def source_sync_loop():
     """Source同步循环 - 每周拉取远端 OPML 并生成本地 RSS 源列表。"""
-    sync_config = config.get("sources", {}).get("sync", {})
-    if not sync_config.get("enabled", False):
+    config = get_config()
+    if not config.sources.sync.enabled:
         return
 
-    cron = sync_config.get("cron", DEFAULT_SOURCE_SYNC_CRON)
-    if not croniter.is_valid(cron):
-        print(f"⚠️ 忽略无效的 RSS 源同步 cron 表达式: '{cron}'")
-        return
-
-    tz = get_timezone(config)
+    cron = config.sources.sync.cron
+    tz = get_timezone()
     print(f"🔁 RSS源同步循环已启动 | 定时: {cron} | 时区: {tz}")
 
     while True:
@@ -618,7 +574,7 @@ async def source_sync_loop(config: Dict):
                 await asyncio.sleep(wait_seconds)
 
             print(f"🔁 执行RSS源同步: {datetime.now(tz).strftime('%Y-%m-%d %H:%M:%S')}")
-            await run_source_sync_job(config)
+            await run_source_sync_job()
 
         except asyncio.CancelledError:
             print("⚠️ RSS源同步循环收到取消信号，安全退出...")
@@ -628,14 +584,14 @@ async def source_sync_loop(config: Dict):
             await asyncio.sleep(60)
 
 
-async def run_startup_source_sync_if_needed(config: Dict):
+async def run_startup_source_sync_if_needed():
     """启动抓取循环前先完成一次 RSS 源同步，避免首次抓取使用旧 OPML。"""
-    sync_config = config.get("sources", {}).get("sync", {})
-    if not sync_config.get("enabled", False):
+    config = get_config()
+    if not config.sources.sync.enabled:
         return
 
     try:
-        await run_source_sync_job(config)
+        await run_source_sync_job()
     except asyncio.CancelledError:
         raise
     except Exception as e:
@@ -644,31 +600,30 @@ async def run_startup_source_sync_if_needed(config: Dict):
 
 async def main():
     print("🚀 AI每日资讯推送系统启动")
-    try:
-        config = load_config()
-        print("✅ 配置加载成功")
-    except Exception as e:
-        print(f"❌ 加载配置失败: {e}")
-        return
+
+    # 配置非法或缺失时 initialize_config 直接退出进程
+    initialize_config()
+    print("✅ 配置加载成功")
 
     print("🔍 检查LLM接口可用性...")
     try:
-        await check_llm_available(config["llm"])
+        await check_llm_available()
         print("✅ LLM接口可用")
     except Exception as e:
-        print(f"❌ LLM接口不可用: {e}")
-        return
+        logging.getLogger(__name__).error("LLM接口不可用，程序退出: %s", e)
+        raise SystemExit(1) from e
 
-    await run_startup_source_sync_if_needed(config)
+    await run_startup_source_sync_if_needed()
 
     await asyncio.gather(
-        fetch_loop(config),
-        push_loop(config),
-        source_sync_loop(config),
+        fetch_loop(),
+        push_loop(),
+        source_sync_loop(),
     )
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

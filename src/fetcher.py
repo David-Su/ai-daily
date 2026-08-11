@@ -6,9 +6,7 @@ from typing import Dict, List, Optional
 
 import aiohttp
 import feedparser
-
-# 默认超时配置（秒）
-DEFAULT_FEED_TIMEOUT = 5
+from src.config import get_config
 
 
 def parse_entry_time(entry) -> Optional[datetime]:
@@ -29,16 +27,12 @@ def parse_entry_time(entry) -> Optional[datetime]:
 async def fetch_single_feed_async(
     feed_info: Dict,
     cutoff_time: datetime,
-    timeout: int = 5,
     session: aiohttp.ClientSession = None,
 ) -> List[Dict]:
     """异步获取单个源的条目"""
     entries = []
+    timeout = get_config().fetch.timeout
     try:
-        # 设置超时，默认5秒
-        if timeout is None:
-            timeout = DEFAULT_FEED_TIMEOUT
-
         url = feed_info["xmlUrl"]
         # 使用完整浏览器请求头，避免被识别为爬虫
         headers = {
@@ -108,21 +102,18 @@ async def fetch_single_feed_async(
 
 
 async def fetch_all_feeds(
-    feeds: List[Dict], cutoff_time: datetime, max_workers: int = 10, timeout: int = None
+    feeds: List[Dict], cutoff_time: datetime
 ) -> List[Dict]:
     """并发获取所有源的条目"""
     all_entries = []
-
-    # 设置默认超时
-    if timeout is None:
-        timeout = DEFAULT_FEED_TIMEOUT
+    fetch_config = get_config().fetch
 
     # 使用 asyncio.Semaphore 限制并发数
-    semaphore = asyncio.Semaphore(max_workers)
+    semaphore = asyncio.Semaphore(fetch_config.max_workers)
 
     async def fetch_with_limit(feed):
         async with semaphore:
-            return await fetch_single_feed_async(feed, cutoff_time, timeout)
+            return await fetch_single_feed_async(feed, cutoff_time)
 
     # 创建所有任务
     tasks = [fetch_with_limit(feed) for feed in feeds]

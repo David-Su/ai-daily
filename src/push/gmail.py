@@ -7,71 +7,65 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 from email.utils import formataddr
-from typing import Dict, List, Optional
+from typing import List
 
 import markdown
 
-from .base import PushPlatform
+from src.config import GmailPushConfig
 
+from .base import PushPlatform
 
 class GmailPlatform(PushPlatform):
     """Gmail SMTP 邮件推送"""
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: GmailPushConfig):
         super().__init__(config)
-        self.username_key_name = config.get("usernameKeyName", "GMAIL_USERNAME")
-        self.password_key_name = config.get(
-            "passwordKeyName", config.get("apiKeyName", "GMAIL_APP_PASSWORD")
-        )
-        self.to_key_name = config.get("toKeyName", "GMAIL_TO")
-        self.username = os.environ.get(self.username_key_name, "")
-        self.password = os.environ.get(self.password_key_name, "")
-        self.smtp_host = config.get("smtpHost", "smtp.gmail.com")
-        self.smtp_port = config.get("smtpPort", 587)
-        self.from_name = config.get("fromName", "AI Daily")
-        self.timeout = config.get("timeout", 30)
+        self.username = os.environ.get(config.usernameKeyName, "")
+        self.password = os.environ.get(config.passwordKeyName, "")
+        self.from_name = config.fromName
 
-    def validate_config(self, config: Dict) -> bool:
-        """检查 Gmail SMTP 配置是否有效"""
-        if not config.get("enabled", False):
-            return False
-
+    def is_ready(self) -> bool:
+        """检查 SMTP 凭据和收件人环境变量是否就绪"""
         if not self.username or not self.password:
+            print(
+                f"⚠️ Gmail 跳过推送: 未设置 {self.config.usernameKeyName} "
+                f"或 {self.config.passwordKeyName} 环境变量"
+            )
             return False
 
         if not self._get_recipients():
+            print(f"⚠️ Gmail 跳过推送: 未设置 {self.config.toKeyName} 环境变量")
             return False
 
-        return bool(self.smtp_host and self._get_smtp_port() is not None)
+        return True
 
     async def send(self, content: str, title: str = None):
         """异步发送邮件，SMTP 阻塞调用放到线程中执行"""
         await asyncio.to_thread(self._send_sync, content, title)
 
     def _send_sync(self, content: str, title: str = None):
-        """发送到 Gmail SMTP"""
+        """发送到由配置指定的 Gmail SMTP 服务。"""
         recipients = self._get_all_recipients()
         message = self._build_message(content, title)
-        smtp_port = self._get_smtp_port()
-
-        if smtp_port is None:
-            raise RuntimeError("Gmail推送失败: smtpPort 配置无效")
 
         try:
-            if self._use_ssl():
-                context = ssl.create_default_context()
+            if self.config.useSSL:
                 with smtplib.SMTP_SSL(
-                    self.smtp_host, smtp_port, timeout=self.timeout, context=context
+                    self.config.smtpHost,
+                    self.config.smtpPort,
+                    timeout=self.config.timeout,
+                    context=ssl.create_default_context(),
                 ) as smtp:
                     smtp.login(self.username, self.password)
                     smtp.send_message(message, to_addrs=recipients)
             else:
                 with smtplib.SMTP(
-                    self.smtp_host, smtp_port, timeout=self.timeout
+                    self.config.smtpHost,
+                    self.config.smtpPort,
+                    timeout=self.config.timeout,
                 ) as smtp:
-                    if self._use_tls():
-                        context = ssl.create_default_context()
-                        smtp.starttls(context=context)
+                    if self.config.useTLS:
+                        smtp.starttls(context=ssl.create_default_context())
                     smtp.login(self.username, self.password)
                     smtp.send_message(message, to_addrs=recipients)
         except Exception as e:
@@ -79,28 +73,28 @@ class GmailPlatform(PushPlatform):
 
     def _build_message(self, content: str, title: str = None) -> EmailMessage:
         """构建邮件消息"""
+        subject = title or self.config.subject
         message = EmailMessage()
-        message["Subject"] = title or self.config.get("subject", "AI Daily")
+        message["Subject"] = subject
         message["From"] = formataddr((self.from_name, self.username))
         message["To"] = ", ".join(self._get_recipients())
-
         cc = self._get_addresses("cc")
         if cc:
             message["Cc"] = ", ".join(cc)
         message.set_content(content, subtype="plain", charset="utf-8")
         message.add_alternative(
-            self._markdown_to_html(content), subtype="html", charset="utf-8"
+            self._markdown_to_html(content, subject), subtype="html", charset="utf-8"
         )
         return message
 
-    def _markdown_to_html(self, content: str) -> str:
+    def _markdown_to_html(self, content: str, subject: str) -> str:
         """将 Markdown 推送内容转成适合邮件显示的 HTML"""
         body = markdown.markdown(
             content,
             extensions=["extra", "sane_lists", "nl2br"],
             output_format="html5",
         )
-        subject = html.escape(self.config.get("subject", "AI Daily"))
+        safe_subject = html.escape(subject)
 
         return f"""<!doctype html>
 <html>
@@ -149,56 +143,28 @@ class GmailPlatform(PushPlatform):
   </style>
 </head>
 <body>
-  <div class="container" aria-label="{subject}">
+  <div class="container" aria-label="{safe_subject}">
     {body}
   </div>
 </body>
 </html>"""
 
+    def _get_recipients(self) -> List[str]:
+        """优先使用配置中的收件人，否则读取环境变量。"""
+        if self.config.to:
+            return list(self.config.to)
+        raw = os.environ.get(self.config.toKeyName, "")
+        return self._normalize_addresses(raw)
+
     def _get_all_recipients(self) -> List[str]:
-        """获取所有实际投递收件人，包括 cc/bcc"""
+        """获取实际投递收件人，包括 cc 和 bcc。"""
         return self._get_recipients() + self._get_addresses("cc") + self._get_addresses(
             "bcc"
         )
 
-    def _get_recipients(self) -> List[str]:
-        """获取主收件人，支持配置值或环境变量"""
-        recipients = self.config.get("to")
-        if not recipients:
-            recipients = os.environ.get(self.to_key_name, "")
-        return self._normalize_addresses(recipients)
-
     def _get_addresses(self, key: str) -> List[str]:
-        """获取 cc/bcc 地址列表"""
-        return self._normalize_addresses(self.config.get(key))
+        return list(getattr(self.config, key))
 
-    def _normalize_addresses(self, value) -> List[str]:
-        """将字符串或列表形式的邮箱地址转为列表"""
-        if not value:
-            return []
-        if isinstance(value, str):
-            candidates = value.split(",")
-        elif isinstance(value, list):
-            candidates = value
-        else:
-            return []
-        return [
-            item.strip()
-            for item in candidates
-            if isinstance(item, str) and item.strip()
-        ]
-
-    def _get_smtp_port(self) -> Optional[int]:
-        """读取 SMTP 端口"""
-        try:
-            return int(self.smtp_port)
-        except (TypeError, ValueError):
-            return None
-
-    def _use_tls(self) -> bool:
-        """是否启用 STARTTLS"""
-        return self.config.get("useTLS", self.config.get("useTls", True))
-
-    def _use_ssl(self) -> bool:
-        """是否使用 SMTP SSL 连接"""
-        return self.config.get("useSSL", self.config.get("useSsl", False))
+    @staticmethod
+    def _normalize_addresses(value: str) -> List[str]:
+        return [item.strip() for item in value.split(",") if item.strip()]

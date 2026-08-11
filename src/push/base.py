@@ -1,17 +1,18 @@
 """推送平台基类"""
 from abc import ABC, abstractmethod
-from typing import Dict
+
+from src.config import ConfigModel
 
 
 class PushPlatform(ABC):
     """推送平台抽象基类"""
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: ConfigModel):
         self.config = config
 
     @abstractmethod
-    def validate_config(self, config: Dict) -> bool:
-        """验证配置是否有效"""
+    def is_ready(self) -> bool:
+        """检查运行所需的环境变量是否就绪"""
         pass
 
     @abstractmethod

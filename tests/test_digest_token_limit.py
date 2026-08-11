@@ -7,7 +7,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src import config as config_module
+from src.config import get_config, initialize_config
 from src.llm import compose_digest
+
+
+@pytest.fixture(autouse=True)
+def initialized_app_config():
+    config_module._reset_config_for_tests()
+    initialize_config(str(ROOT / "config.yaml"))
+    yield
+    config_module._reset_config_for_tests()
+
+
+def _llm_config(**overrides):
+    """构造测试用 LLMConfig，只覆盖当前用例关心的字段。"""
+    return get_config().llm.model_copy(update=overrides)
 
 
 @pytest.mark.asyncio
@@ -53,28 +68,16 @@ async def test_digest_removes_oldest_then_lowest_score_until_within_token_limit(
     def fake_count_tokens(prompt):
         return sum(title in prompt for title in ("old-low", "old-high", "new-low"))
 
-    async def fake_call_llm(prompt, config):
+    async def fake_call_llm(prompt):
         captured["prompt"] = prompt
         return "# Digest"
 
     monkeypatch.setattr(llm_module, "_count_digest_tokens", fake_count_tokens)
     monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
 
-    result = await compose_digest(
-        entries,
-        [],
-        {
-            "digest_max_input_tokens": 1,
-            "prompts": {
-                "domain": {
-                    "domains": [
-                        {"key": "AI", "digest": "prompts/digest/ai/digest.md"}
-                    ]
-                }
-            },
-        },
-        domain="AI",
-    )
+    custom_llm = _llm_config(digest_max_input_tokens=1)
+    config_module._app_config = get_config().model_copy(update={"llm": custom_llm})
+    result = await compose_digest(entries, [], domain="AI")
 
     assert result == "# Digest"
     assert "new-low" in captured["prompt"]

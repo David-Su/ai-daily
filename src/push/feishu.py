@@ -5,24 +5,24 @@ from typing import Dict
 
 import aiohttp
 
+from src.config import WebhookPushConfig
+
 from .base import PushPlatform
 
 
 class FeishuPlatform(PushPlatform):
     """飞书 Webhook 推送"""
 
-    def __init__(self, config: Dict):
+    def __init__(self, config: WebhookPushConfig):
         super().__init__(config)
-        self.api_key_name = config.get("apiKeyName", "FEISHU_WEBHOOK_URL")
-        self.webhook_url = os.environ.get(self.api_key_name, "")
+        self.webhook_url = os.environ.get(config.apiKeyName, "")
 
-    def validate_config(self, config: Dict) -> bool:
-        """检查飞书配置是否有效"""
-        if not config.get("enabled", False):
+    def is_ready(self) -> bool:
+        """检查 Webhook 环境变量是否已设置"""
+        if not self.webhook_url:
+            print(f"⚠️ 飞书 跳过推送: 未设置 {self.config.apiKeyName} 环境变量")
             return False
-        api_key_name = config.get("apiKeyName", "FEISHU_WEBHOOK_URL")
-        webhook = os.environ.get(api_key_name, "")
-        return bool(webhook)
+        return True
 
     async def send(self, content: str, title: str = None):
         """发送到飞书"""

@@ -72,12 +72,12 @@ flowchart LR
 关键流程：
 
 ```python
-config = load_config()
-await check_llm_available(config["llm"])
-await asyncio.gather(fetch_loop(config), push_loop(config))
+initialize_config()
+await check_llm_available()
+await asyncio.gather(fetch_loop(), push_loop())
 ```
 
-`run_fetch_job(config)`：
+`run_fetch_job()`：
 
 1. 根据 `fetch_interval_minutes` 和 `fetch_lookback_minutes` 计算 UTC 抓取窗口。
 2. 合并 OPML 与自定义源，应用 `block` 和 `block_domains`。
@@ -87,7 +87,7 @@ await asyncio.gather(fetch_loop(config), push_loop(config))
 6. 保存到 `news-data/fetch-YYYY-MM-DD.json`。
 7. 对达到 `hot_threshold` 的条目按 domain 生成即时快讯，推送并追加到 `notify/<domain>/notify-YYYY-MM-DD.md`。
 
-`run_push_job(config)`：
+`run_push_job()`：
 
 1. 调用 `collect_entries_for_domain_pushes()` 按 domain 收集候选内容。
 2. 每个 domain 独立读取上次 push 时间，并以 24 小时窗口作为兜底边界。
@@ -99,12 +99,15 @@ await asyncio.gather(fetch_loop(config), push_loop(config))
 
 职责：
 
-- `load_config()` 读取 JSON 配置。
+- 用 Pydantic 模型描述整份配置：`AppConfig` 是根模型，下辖 `FilterConfig`、`DedupeConfig`、`ScheduleConfig`、`FetchConfig`、`LLMConfig`、`PushConfig`、`SourcesConfig`。
+- `load_config()` 用 `yaml.safe_load()` 读取 `config.yaml`，再交给 `AppConfig.model_validate()` 校验，返回类型化对象，业务代码统一用属性访问（`config.llm.model`）。
+- `initialize_config()` 在启动时只加载一次并保存全局只读 `AppConfig`；`get_config()` 在业务模块中读取它，避免配置对象沿调用链传递。
+- `get_timezone()` 只从已初始化的全局配置读取时区。
 - `parse_opml()` 解析 OPML 订阅源。
 - `merge_sources()` 合并 `base_opml + add - block`，并按 `xmlUrl` 去重。
 - `source_sync.sync_opml_sources()` 下载 `sources.sync.urls` 中的远端 OPML，解析 RSS outline，按 `xmlUrl` 去重，并在所有远端源都成功时原子替换 `base_opml`。
 - `block_domains` 支持 `*.substack.com` 形式，也支持 `fnmatch` 通配。
-- `get_timezone()` 优先读取 `schedule.timezone_hours`，未配置时使用系统本地时区。
+- `get_timezone()` 使用必填的 `schedule.timezone_hours`，不会回退到系统本地时区。
 
 ### `src/fetcher.py`
 
@@ -252,11 +255,23 @@ platforms = {
 | 飞书 | 发送 V2 interactive card，Markdown 元素按 8000 字符切分 |
 | Gmail | SMTP 发送 `multipart/alternative` 邮件，Markdown + HTML 双正文 |
 
-`send_to_platforms()` 会遍历所有配置项，只发送到 `enabled=true` 且配置校验通过的平台。单个平台失败只打印错误，不中断其他平台。
+`send_to_platforms()` 从全局 `AppConfig` 遍历 `push_config.enabled_platforms()`，只发送到 `enabled=true` 的平台；`create_platform()` 在平台所需环境变量缺失时返回 `None` 并跳过。单个平台失败只打印错误，不中断其他平台。
 
 ## 配置详解
 
-配置文件是根目录的 `config.yaml`，由 `load_config()` 用 `yaml.safe_load()` 读取。顶层结构：
+配置文件是根目录的 `config.yaml`，由 `load_config()` 用 `yaml.safe_load()` 读取，并用 Pydantic 模型 `AppConfig` 校验。
+
+校验规则：
+
+- 所有字段都是必填，代码中不设默认值，配置里缺什么就报什么。
+- 禁止未知字段（`extra="forbid"`），拼错的键名会直接报错而不是被忽略。
+- 值域约束：分数类字段限定 `0-100`，时长与并发类字段必须大于 0，`timezone_hours` 限定 `-12` 到 `14`。
+- 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`activity_domains` 中的 domain 必须在 `prompts.domain.domains` 里配好 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
+- 初始化时还会解析相对路径并检查 prompt 与 `base_opml` 文件可读，避免进入循环后才失败。
+
+配置文件缺失、YAML 语法错误、顶层不是映射，或任一字段校验失败时，`load_config()` 会用 `logging` 打印失败原因和逐条问题位置，然后 `sys.exit(1)` 退出，不进入主流程。
+
+顶层结构：
 
 ```yaml
 filter:
@@ -292,6 +307,7 @@ llm:
   digest_max_input_tokens: 450000
   max_concurrent_batches: 3
   max_retries: 3
+  startup_timeout_seconds: 15
   prompts:
     domain:
       activity_domains:
@@ -318,8 +334,17 @@ push:
     enabled: true
     usernameKeyName: GMAIL_USERNAME
     passwordKeyName: GMAIL_APP_PASSWORD
+    to: []
     toKeyName: GMAIL_TO
+    cc: []
+    bcc: []
     fromName: AI Daily
+    subject: AI Daily
+    smtpHost: smtp.gmail.com
+    smtpPort: 587
+    useTLS: true
+    useSSL: false
+    timeout: 30
 
 sources:
   base_opml: resources/rss.opml
@@ -328,6 +353,7 @@ sources:
     cron: "0 4 * * 0"
     backup: true
     timeout: 30
+    title: AI Daily RSS Sources
     urls:
       - https://raw.githubusercontent.com/.../feeds.opml
   add:                  # 自定义补充源
@@ -342,7 +368,7 @@ sources:
 
 ### 环境变量
 
-| 配置项 | 默认环境变量 | 说明 |
+| 配置项 | 环境变量示例 | 说明 |
 |--------|--------------|------|
 | LLM API Key | `OPENAI_API_KEY` | 由 `llm.apiKeyName` 指定，可改成任意变量名 |
 | Discord Webhook | `DISCORD_WEBHOOK_URL` | 由 `push.discord.apiKeyName` 指定 |
@@ -424,7 +450,8 @@ pytest tests/test_flow.py -v
 
 | 步骤 | 测试内容 |
 |------|----------|
-| 配置 | 校验 `sources`、`filter`、`schedule`、`fetch`、`llm`、`push`，并检查 prompt 文件路径存在 |
+| 配置 | 真实 `config.yaml` 能通过模型校验，启用 domain 的 prompt 文件可访问 |
+| 配置容错 | 文件缺失、YAML 非法、缺少字段、值越界、未知字段时 `load_config()` 退出并打印错误日志 |
 | 抓取前处理 | 合并 RSS 源、去重、屏蔽源、HTML 转 Markdown |
 | LLM 评分 | 使用 fake LLM 返回 JSON，验证评分、domain、summary 合并 |
 | Digest | 使用 fake LLM 验证 domain digest prompt 可调用 |

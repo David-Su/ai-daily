@@ -23,7 +23,7 @@ schedule:
     - "30 9 * * *"
   hot_push_block_periods:              # 即时推送静默时段 [开始, 结束]
     - ["01:00", "09:31"]
-  timezone_hours: 8                    # 展示时区偏移，留空则用系统时区
+  timezone_hours: 8                    # 展示时区偏移
 
 # 抓取
 fetch:
@@ -40,6 +40,7 @@ llm:
   digest_max_input_tokens: 450000     # digest 输入 token 上限
   max_concurrent_batches: 3
   max_retries: 3
+  startup_timeout_seconds: 15
   prompts:
     domain:
       activity_domains:               # 启用的 domain，同时决定推送顺序
@@ -68,8 +69,17 @@ push:
     enabled: true
     usernameKeyName: GMAIL_USERNAME
     passwordKeyName: GMAIL_APP_PASSWORD
+    to: []
     toKeyName: GMAIL_TO
+    cc: []
+    bcc: []
     fromName: AI Daily
+    subject: AI Daily
+    smtpHost: smtp.gmail.com
+    smtpPort: 587
+    useTLS: true
+    useSSL: false
+    timeout: 30
 
 # RSS 源：base_opml + add - block - block_domains
 sources:
@@ -79,6 +89,7 @@ sources:
     cron: "0 4 * * 0"
     backup: true
     timeout: 30
+    title: AI Daily RSS Sources
     urls:
       - https://raw.githubusercontent.com/ginobefun/BestBlogs/main/BestBlogs_RSS_Articles.opml
       - https://raw.githubusercontent.com/JackyST0/awesome-rsshub-routes/main/feeds.opml

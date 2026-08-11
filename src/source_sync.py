@@ -11,10 +11,8 @@ from urllib.parse import urlparse
 
 import aiohttp
 
+from src.config import get_config
 
-DEFAULT_SOURCE_SYNC_CRON = "0 4 * * 0"
-DEFAULT_SOURCE_SYNC_TIMEOUT = 30
-DEFAULT_SOURCE_SYNC_TITLE = "AI Daily RSS Sources"
 DESCRIPTION_ATTR_RE = re.compile(
     r"\sdescription=(['\"]).*?\s(?=(?:xmlUrl|xmlurl)=)",
 )
@@ -103,7 +101,7 @@ def dedupe_feeds(feeds: Iterable[Dict]) -> List[Dict]:
     return result
 
 
-def build_opml(feeds: Iterable[Dict], title: str = DEFAULT_SOURCE_SYNC_TITLE) -> str:
+def build_opml(feeds: Iterable[Dict], title: str) -> str:
     opml = ET.Element("opml", {"version": "2.0"})
     head = ET.SubElement(opml, "head")
     ET.SubElement(head, "title").text = title
@@ -131,7 +129,7 @@ def build_opml(feeds: Iterable[Dict], title: str = DEFAULT_SOURCE_SYNC_TITLE) ->
     return f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_body}\n'
 
 
-def write_opml(target_path: str, feeds: Iterable[Dict], backup: bool = True) -> Path:
+def write_opml(target_path: str, feeds: Iterable[Dict], backup: bool, title: str) -> Path:
     target = Path(target_path)
     target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -140,7 +138,7 @@ def write_opml(target_path: str, feeds: Iterable[Dict], backup: bool = True) -> 
         backup_path.write_bytes(target.read_bytes())
 
     tmp_path = target.with_name(f"{target.name}.tmp")
-    tmp_path.write_text(build_opml(feeds), encoding="utf-8")
+    tmp_path.write_text(build_opml(feeds, title), encoding="utf-8")
     os.replace(tmp_path, target)
     return target
 
@@ -151,20 +149,17 @@ async def _fetch_opml(session: aiohttp.ClientSession, url: str, timeout: int) ->
         return await response.text()
 
 
-async def sync_opml_sources(sources_config: Dict) -> SourceSyncResult:
-    sync_config = sources_config.get("sync", {})
-    urls = []
-    for raw_url in sync_config.get("urls", []):
-        url = str(raw_url or "").strip()
-        if _is_http_url(url):
-            urls.append(url)
-    target_path = Path(sources_config.get("base_opml", "resources/rss.opml"))
+async def sync_opml_sources() -> SourceSyncResult:
+    sources_config = get_config().sources
+    sync_config = sources_config.sync
+    urls = sync_config.urls
+    target_path = Path(sources_config.base_opml)
 
     if not urls:
         return SourceSyncResult(False, target_path, 0, 0, ["sources.sync.urls is empty"])
 
-    timeout = int(sync_config.get("timeout", DEFAULT_SOURCE_SYNC_TIMEOUT))
-    backup = bool(sync_config.get("backup", True))
+    timeout = sync_config.timeout
+    backup = sync_config.backup
 
     failures: List[str] = []
     feeds: List[Dict] = []
@@ -192,5 +187,7 @@ async def sync_opml_sources(sources_config: Dict) -> SourceSyncResult:
     if not feeds:
         return SourceSyncResult(False, target_path, len(urls), 0, ["no feeds after dedupe"])
 
-    written_path = write_opml(str(target_path), feeds, backup=backup)
+    written_path = write_opml(
+        str(target_path), feeds, backup=backup, title=sync_config.title
+    )
     return SourceSyncResult(True, written_path, len(urls), len(feeds), [])

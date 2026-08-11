@@ -2,15 +2,26 @@ from datetime import datetime
 from pathlib import Path
 import sys
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.config import get_timezone, load_config
+from src import config as config_module
+from src.config import get_timezone, initialize_config
 from src.storage import extract_push_time, get_push_file, save_push_file
 
 
+@pytest.fixture(autouse=True)
+def initialized_app_config():
+    config_module._reset_config_for_tests()
+    initialize_config(str(ROOT / "config.yaml"))
+    yield
+    config_module._reset_config_for_tests()
+
+
 def _configured_timezone():
-    return get_timezone(load_config(str(ROOT / "config.yaml")))
+    return get_timezone()
 
 
 def test_push_filename_and_frontmatter_use_the_same_configured_timezone(tmp_path):

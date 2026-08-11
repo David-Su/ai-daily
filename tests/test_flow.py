@@ -1,17 +1,29 @@
 import json
+import logging
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
-from src.config import get_timezone, load_config, merge_sources
+from src import config as config_module
+from src.config import (
+    AppConfig,
+    LLMConfig,
+    SourcesConfig,
+    get_timezone,
+    get_config,
+    initialize_config,
+    load_config,
+    merge_sources,
+)
 from src.fetcher import fetch_all_feeds
 from src.llm import (
     RETRYABLE_STATUS_CODES,
@@ -51,15 +63,62 @@ RUN_REAL_PUSH = False
 
 
 def _config():
-    """读取真实 config.yaml，确保测试始终贴着当前配置接口走。"""
-    return load_config(str(CONFIG_PATH))
+    """返回当前测试已初始化的全局配置。"""
+    return get_config()
+
+
+@pytest.fixture(autouse=True)
+def initialized_app_config():
+    """每个测试独立初始化一次全局 AppConfig。"""
+    config_module._reset_config_for_tests()
+    initialize_config(str(CONFIG_PATH))
+    yield
+    config_module._reset_config_for_tests()
+
+
+def _install_config(config: AppConfig) -> AppConfig:
+    """将测试专用配置安装到全局单例。"""
+    config_module._app_config = config
+    return config
+
+
+def _llm_config(**overrides) -> LLMConfig:
+    """构造测试用 LLMConfig，只覆盖当前用例关心的字段。"""
+    return _config().llm.model_copy(update=overrides)
+
+
+def _sources_config(**overrides) -> SourcesConfig:
+    """构造测试用 SourcesConfig，未指定的字段用最小合法值填充。"""
+    sync = {
+        "enabled": False,
+        "cron": "0 4 * * 0",
+        "backup": False,
+        "timeout": 30,
+        "title": "AI Daily RSS Sources",
+        "urls": [],
+    }
+    sync.update(overrides.pop("sync", {}))
+    data = {
+        "base_opml": "resources/rss.opml",
+        "sync": sync,
+        "add": [],
+        "block": [],
+        "block_domains": [],
+    }
+    data.update(overrides)
+    return SourcesConfig.model_validate(data)
+
+
+def _app_config_with_sources(**overrides) -> AppConfig:
+    """基于真实 config.yaml 替换 sources，用于只关心 sources 的测试。"""
+    return _config().model_copy(update={"sources": _sources_config(**overrides)})
 
 
 def _domain(config):
     """选择测试用 domain；默认取配置里的第一个活跃 domain，可用 DEBUG_DOMAIN 手动指定。"""
     if DEBUG_DOMAIN:
         return DEBUG_DOMAIN
-    return config["llm"]["prompts"]["domain"]["activity_domains"][0]
+    return config.llm.prompts.domain.activity_domains[0]
 
 
 def _sample_entries(domain):
@@ -94,20 +153,99 @@ def _sample_entries(domain):
 
 
 def test_config_interface_and_prompt_files():
-    """验证 config.yaml 的主接口存在，并检查当前启用 domain 的 prompt 文件都可访问。"""
+    """验证 config.yaml 能通过模型校验，并检查当前启用 domain 的 prompt 文件都可访问。"""
     config = _config()
 
-    for key in ["sources", "filter", "schedule", "fetch", "llm", "push"]:
-        assert key in config
+    prompts = config.llm.prompts
+    assert Path(prompts.score_batch).exists()
 
-    prompts = config["llm"]["prompts"]
-    assert Path(prompts["score_batch"]).exists()
+    domains = {item.key: item for item in prompts.domain.domains}
+    for domain in prompts.domain.activity_domains:
+        assert Path(domains[domain].score_standard).exists()
+        assert Path(domains[domain].digest).exists()
+        assert Path(domains[domain].immediate_push).exists()
 
-    domains = {item["key"]: item for item in prompts["domain"]["domains"]}
-    for domain in prompts["domain"]["activity_domains"]:
-        assert Path(domains[domain]["score_standard"]).exists()
-        assert Path(domains[domain]["digest"]).exists()
-        assert Path(domains[domain]["immediate_push"]).exists()
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(None, id="missing_file"),
+        pytest.param("filter: [", id="invalid_yaml"),
+        pytest.param("- a\n- b\n", id="not_a_mapping"),
+        pytest.param("filter: {}\n", id="missing_sections"),
+    ],
+)
+def test_load_config_exits_on_unusable_config(tmp_path, caplog, content):
+    """配置缺失或非法时立即退出，并记录错误日志。"""
+    path = tmp_path / "config.yaml"
+    if content is not None:
+        path.write_text(content, encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit) as exc_info:
+            load_config(str(path))
+
+    assert exc_info.value.code == 1
+    assert "配置加载失败" in caplog.text
+
+
+def test_load_config_rejects_illegal_field_values(tmp_path, caplog):
+    """字段值越界时报错并指出具体位置。"""
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["filter"]["min_score"] = 120
+    raw["schedule"]["push_cron"] = ["not a cron"]
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit):
+            load_config(str(path))
+
+    assert "filter.min_score" in caplog.text
+    assert "schedule.push_cron" in caplog.text
+
+
+def test_load_config_rejects_unknown_field(tmp_path, caplog):
+    """未知字段视为配置错误，避免拼写错误被静默忽略。"""
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["filter"]["min_scores"] = 60
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit):
+            load_config(str(path))
+
+    assert "filter.min_scores" in caplog.text
+
+
+def test_config_cross_field_validation_rejects_invalid_schedule(tmp_path, caplog):
+    """业务约束在初始化前校验，不在主循环中修正。"""
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["schedule"]["fetch_lookback_minutes"] = 1
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit) as exc_info:
+            load_config(str(path))
+
+    assert exc_info.value.code == 1
+    assert "fetch_lookback_minutes" in caplog.text
+
+
+def test_global_config_is_initialized_once_and_is_read_only():
+    """业务模块只能读取已经初始化的全局 AppConfig。"""
+    config_module._reset_config_for_tests()
+    with pytest.raises(RuntimeError, match="尚未初始化"):
+        get_config()
+
+    config = initialize_config(str(CONFIG_PATH))
+    assert get_config() is config
+    with pytest.raises(Exception):
+        config.filter.min_score = 70
+    with pytest.raises(RuntimeError, match="不能重复初始化"):
+        initialize_config(str(CONFIG_PATH))
 
 
 def test_retryable_llm_status_codes_include_transient_gateway_failures():
@@ -173,14 +311,13 @@ async def test_call_llm_retries_cloudflare_524(monkeypatch):
     )
     monkeypatch.setattr(llm_module.asyncio, "sleep", no_wait)
 
-    result = await llm_module.call_llm(
-        "test prompt",
-        {
-            "baseUrl": "https://example.com/v1",
-            "apiKeyName": "TEST_LLM_API_KEY",
-            "max_retries": 2,
-        },
+    custom_llm = _llm_config(
+        baseUrl="https://example.com/v1",
+        apiKeyName="TEST_LLM_API_KEY",
+        max_retries=2,
     )
+    _install_config(_config().model_copy(update={"llm": custom_llm}))
+    result = await llm_module.call_llm("test prompt")
 
     assert result == "retry succeeded"
     assert len(requests) == 2
@@ -189,13 +326,13 @@ async def test_call_llm_retries_cloudflare_524(monkeypatch):
 def test_sources_merge_and_html_processing():
     """验证 RSS 源合并、去重、屏蔽配置，以及 HTML 到 Markdown 的基础转换。"""
     config = _config()
-    sources = merge_sources(config["sources"])
+    sources = merge_sources()
 
     assert sources
     urls = [source["xmlUrl"] for source in sources]
     assert len(urls) == len(set(urls))
 
-    blocked_urls = {item["xmlUrl"] for item in config["sources"].get("block", [])}
+    blocked_urls = {item.xmlUrl for item in config.sources.block}
     assert blocked_urls.isdisjoint(urls)
 
     markdown = html_to_markdown(
@@ -228,16 +365,24 @@ def test_source_sync_opml_parse_dedupe_and_write(tmp_path):
     assert feeds[0]["category"] == "AI"
 
     target = tmp_path / "rss.opml"
-    write_opml(str(target), feeds, backup=True)
-
-    sources = merge_sources(
-        {
-            "base_opml": str(target),
-            "add": [{"title": "Manual", "xmlUrl": "https://example.com/manual.xml"}],
-            "block": [{"xmlUrl": "https://example.com/b.xml"}],
-            "block_domains": [],
-        }
+    write_opml(
+        str(target), feeds, backup=True, title="AI Daily RSS Sources"
     )
+
+    _install_config(
+        _app_config_with_sources(
+            base_opml=str(target),
+            add=[
+                {
+                    "title": "Manual",
+                    "xmlUrl": "https://example.com/manual.xml",
+                    "category": "Manual",
+                }
+            ],
+            block=[{"xmlUrl": "https://example.com/b.xml"}],
+        )
+    )
+    sources = merge_sources()
 
     assert [source["xmlUrl"] for source in sources] == [
         "https://example.com/a.xml",
@@ -286,15 +431,13 @@ async def test_source_sync_skips_invalid_urls(tmp_path, monkeypatch):
 
     monkeypatch.setattr(source_sync, "_fetch_opml", fake_fetch_opml)
 
-    result = await sync_opml_sources(
-        {
-            "base_opml": str(tmp_path / "rss.opml"),
-            "sync": {
-                "urls": ["", "not-a-url", "ftp://example.com/rss.opml", " https://example.com/rss.opml "],
-                "backup": False,
-            },
-        }
+    _install_config(
+        _app_config_with_sources(
+            base_opml=str(tmp_path / "rss.opml"),
+            sync={"urls": ["https://example.com/rss.opml"]},
+        )
     )
+    result = await sync_opml_sources()
 
     assert result.updated
     assert result.source_count == 1
@@ -308,17 +451,17 @@ async def test_startup_source_sync_runs_when_sync_enabled(monkeypatch):
     import src.main as main_module
 
     calls = []
-    config = {
-        "sources": {"sync": {"enabled": True}},
-    }
+    config = _app_config_with_sources(
+        sync={"enabled": True, "urls": ["https://example.com/rss.opml"]}
+    )
 
-    async def fake_run_source_sync_job(startup_config):
-        assert startup_config is config
+    async def fake_run_source_sync_job():
         calls.append("startup_sync")
 
+    _install_config(config)
     monkeypatch.setattr(main_module, "run_source_sync_job", fake_run_source_sync_job)
 
-    await main_module.run_startup_source_sync_if_needed(config)
+    await main_module.run_startup_source_sync_if_needed()
 
     assert calls == ["startup_sync"]
 
@@ -329,31 +472,27 @@ async def test_main_runs_startup_source_sync_before_loops(monkeypatch):
     import src.main as main_module
 
     calls = []
-    config = {
-        "sources": {"sync": {"enabled": True}},
-        "llm": {},
-    }
+    config = _app_config_with_sources(
+        sync={"enabled": True, "urls": ["https://example.com/rss.opml"]}
+    )
 
-    async def fake_check_llm_available(llm_config):
+    async def fake_check_llm_available():
         calls.append("llm_check")
 
-    async def fake_run_startup_source_sync_if_needed(startup_config):
-        assert startup_config is config
+    async def fake_run_startup_source_sync_if_needed():
         calls.append("startup_sync")
 
-    async def fake_fetch_loop(loop_config):
-        assert loop_config is config
+    async def fake_fetch_loop():
         calls.append("fetch_loop")
 
-    async def fake_push_loop(loop_config):
-        assert loop_config is config
+    async def fake_push_loop():
         calls.append("push_loop")
 
-    async def fake_source_sync_loop(loop_config):
-        assert loop_config is config
+    async def fake_source_sync_loop():
         calls.append("source_sync_loop")
 
-    monkeypatch.setattr(main_module, "load_config", lambda: config)
+    _install_config(config)
+    monkeypatch.setattr(main_module, "initialize_config", lambda: config)
     monkeypatch.setattr(main_module, "check_llm_available", fake_check_llm_available)
     monkeypatch.setattr(
         main_module,
@@ -380,13 +519,14 @@ async def test_score_step_with_fake_llm(monkeypatch):
     domain = _domain(config)
     entries = _sample_entries(domain)
 
-    async def fake_call_llm(prompt, llm_config, response_format=None):
+    async def fake_call_llm(prompt, response_format=None):
         assert entries[0]["title"] in prompt
         assert response_format == {"type": "json_object"}
         return json.dumps(
             {
                 "items": [
                     {
+                        "id": 0,
                         "link": entries[0]["link"],
                         "tags": ["release"],
                         "domain": domain,
@@ -394,6 +534,7 @@ async def test_score_step_with_fake_llm(monkeypatch):
                         "summary": "Release summary",
                     },
                     {
+                        "id": 1,
                         "link": entries[1]["link"],
                         "tags": ["funding"],
                         "domain": domain,
@@ -406,9 +547,8 @@ async def test_score_step_with_fake_llm(monkeypatch):
 
     monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
 
-    scored, errors = await score_batch(entries, config["llm"])
+    scored = await score_batch(entries)
 
-    assert errors == []
     assert scored[0]["score"] == 88
     assert scored[0]["domain"] == domain
     assert scored[1]["summary"] == "Funding summary"
@@ -444,7 +584,7 @@ async def test_digest_step_with_fake_llm(monkeypatch):
     entries[0]["score"] = 88
     entries[0]["summary"] = "Release summary"
 
-    async def fake_call_llm(prompt, llm_config):
+    async def fake_call_llm(prompt):
         assert entries[0]["title"] in prompt
         assert "recent item" in prompt
         return "# Digest\n\n- Ready"
@@ -455,7 +595,6 @@ async def test_digest_step_with_fake_llm(monkeypatch):
     content = await compose_digest(
         [entries[0]],
         [entries[1]],
-        config["llm"],
         recent_push_context="- recent item",
         domain=domain,
     )
@@ -470,13 +609,13 @@ async def test_immediate_push_uses_domain_prompt(monkeypatch):
 
     config = _config()
     domains = {
-        item["key"]: item for item in config["llm"]["prompts"]["domain"]["domains"]
+        item.key: item for item in config.llm.prompts.domain.domains
     }
     domain = "Investment" if "Investment" in domains else _domain(config)
     entries = _sample_entries(domain)
     entries[0]["score"] = 95
 
-    async def fake_call_llm(prompt, llm_config):
+    async def fake_call_llm(prompt):
         assert entries[0]["title"] in prompt
         assert "recent item" in prompt
         if domain == "Investment":
@@ -487,7 +626,6 @@ async def test_immediate_push_uses_domain_prompt(monkeypatch):
 
     content, error = await generate_immediate_push(
         [entries[0]],
-        config["llm"],
         recent_push_context="- recent item",
         domain=domain,
     )
@@ -512,9 +650,9 @@ def test_notify_titles_are_scoped_by_domain(tmp_path):
         domain="Investment",
     )
 
-    ai_titles = load_recent_notify_titles(1, data_dir=str(tmp_path), domain="AI")
+    ai_titles = load_recent_notify_titles(data_dir=str(tmp_path), domain="AI")
     investment_titles = load_recent_notify_titles(
-        1, data_dir=str(tmp_path), domain="Investment"
+        data_dir=str(tmp_path), domain="Investment"
     )
 
     assert "AI model release" in ai_titles
@@ -527,7 +665,7 @@ def test_storage_and_push_candidate_selection(tmp_path):
     """写入临时 fetch 文件后，验证主流程能按 domain、分数和时间筛出待推送与上下文。"""
     config = _config()
     domain = _domain(config)
-    tz = get_timezone(config)
+    tz = get_timezone()
     now = datetime.now(tz)
     old_time = now - timedelta(days=2)
 
@@ -573,12 +711,7 @@ def test_storage_and_push_candidate_selection(tmp_path):
     fetch_file = get_fetch_file(now.date(), str(tmp_path))
     save_fetch_file(fetch_file, {"date": now.date().isoformat()}, entries)
 
-    groups = collect_entries_for_domain_pushes(
-        context_days=1,
-        min_score=config["filter"]["min_score"],
-        data_dir=str(tmp_path),
-        config=config,
-    )
+    groups = collect_entries_for_domain_pushes(data_dir=str(tmp_path))
 
     assert [item["title"] for item in groups[domain]["to_push"]] == ["Fresh item"]
     assert [item["title"] for item in groups[domain]["context"]] == ["Context item"]
@@ -691,7 +824,12 @@ def test_fetch_dedupe_keys_cover_title_content_and_append(tmp_path):
     )
 
     entries = read_entries(today_file)
-    assert [entry["title"] for entry in entries] == ["Same Title", "Unique Title"]
+    assert [entry["title"] for entry in entries] == [
+        "Same Title",
+        "Same Title",
+        "Unique Title",
+        "Another Unique Title",
+    ]
 
 
 def test_rapidfuzz_content_dedupe_detects_near_duplicate():
@@ -710,23 +848,23 @@ def test_rapidfuzz_content_dedupe_detects_near_duplicate():
             "content": "Google released a new local AI model with faster inference and better tool use!",
         },
         keys,
+        get_config().dedupe.content_threshold,
     )
 
 
 def test_push_message_can_be_built_from_config(monkeypatch):
     """基于 config.yaml 的 Gmail 配置构建邮件消息，只验证格式，不发送真实邮件。"""
     config = _config()
-    gmail_config = dict(config["push"]["gmail"])
-    gmail_config["enabled"] = True
-    gmail_config["to"] = "receiver@example.com"
+    gmail_config = config.push.gmail
 
-    monkeypatch.setenv(gmail_config["usernameKeyName"], "sender@example.com")
-    monkeypatch.setenv(gmail_config["passwordKeyName"], "app-password")
+    monkeypatch.setenv(gmail_config.usernameKeyName, "sender@example.com")
+    monkeypatch.setenv(gmail_config.passwordKeyName, "app-password")
+    monkeypatch.setenv(gmail_config.toKeyName, "receiver@example.com")
 
     platform = GmailPlatform(gmail_config)
     message = platform._build_message("# Test\n\nHello", "AI Daily Test")
 
-    assert platform.validate_config(gmail_config)
+    assert platform.is_ready()
     assert message["Subject"] == "AI Daily Test"
     assert message["To"] == "receiver@example.com"
     assert "sender@example.com" in message["From"]
@@ -737,15 +875,10 @@ def test_push_message_can_be_built_from_config(monkeypatch):
 async def test_debug_real_rss_fetch_step():
     """真实 RSS 抓取调试；默认跳过，打开 RUN_REAL_RSS_FETCH 后才访问网络。"""
     config = _config()
-    sources = merge_sources(config["sources"])[:REAL_SOURCE_LIMIT]
+    sources = merge_sources()[:REAL_SOURCE_LIMIT]
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=REAL_FETCH_MINUTES)
 
-    entries = await fetch_all_feeds(
-        sources,
-        cutoff,
-        max_workers=config["fetch"]["max_workers"],
-        timeout=config["fetch"]["timeout"],
-    )
+    entries = await fetch_all_feeds(sources, cutoff)
 
     for entry in entries:
         entry["content"] = html_to_markdown(entry.get("content", ""), entry["link"])
@@ -759,11 +892,10 @@ async def test_debug_real_rss_fetch_step():
 async def test_debug_real_llm_score_step():
     """真实 LLM 评分调试；默认跳过，打开 RUN_REAL_LLM_SCORE 后才调用接口。"""
     config = _config()
-    scored, errors = await score_batch(_sample_entries(_domain(config)), config["llm"])
+    scored = await score_batch(_sample_entries(_domain(config)))
 
     print(json.dumps(scored, ensure_ascii=False, indent=2))
     assert scored
-    assert errors == []
 
 
 @pytest.mark.skipif(not RUN_REAL_LLM_DIGEST, reason="real LLM digest debug is off")
@@ -776,7 +908,7 @@ async def test_debug_real_llm_digest_step():
     entries[0]["score"] = 88
     entries[0]["summary"] = "Release summary"
 
-    content = await compose_digest([entries[0]], [entries[1]], config["llm"], domain=domain)
+    content = await compose_digest([entries[0]], [entries[1]], domain=domain)
 
     print(content)
     assert content.strip()
@@ -790,6 +922,5 @@ async def test_debug_real_push_step():
 
     await send_to_platforms(
         "# AI Daily Test\n\nThis is a manual push test.",
-        config["push"],
         title="AI Daily Test",
     )

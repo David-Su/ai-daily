@@ -8,7 +8,7 @@ AI 驱动的 RSS 新闻聚合与分领域推送系统，支持 400+ 信息源，
 
 - 语言：Python 3.10+
 - 框架：asyncio
-- 依赖：feedparser, aiohttp, croniter, markdownify, markdown, python-dotenv
+- 依赖：feedparser, aiohttp, croniter, markdownify, markdown, python-dotenv, pyyaml, pydantic
 - 构建：pip
 - 测试：pytest
 

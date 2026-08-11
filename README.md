@@ -40,11 +40,11 @@ pip install -r requirements.txt
 
 ### 3. 配置环境变量
 
-在项目根目录创建 `.env` 文件。默认 `config.yaml` 使用 OpenAI 兼容接口，并从 `OPENAI_API_KEY` 读取密钥：
+在项目根目录创建 `.env` 文件。环境变量名由 `config.yaml` 的 `llm.apiKeyName` 和各推送平台的 `*KeyName` 字段决定：
 
 ```bash
 # LLM API（OpenAI API 兼容接口）
-OPENAI_API_KEY=your_api_key_here
+RIGHT_CODE_API_KEY=your_api_key_here
 
 # Gmail SMTP
 GMAIL_USERNAME=your_email@gmail.com
@@ -74,6 +74,7 @@ llm:
   digest_max_input_tokens: 450000
   max_concurrent_batches: 3
   max_retries: 3
+  startup_timeout_seconds: 15
   prompts:
     domain:
       activity_domains:
@@ -100,8 +101,17 @@ push:
     enabled: true
     usernameKeyName: GMAIL_USERNAME
     passwordKeyName: GMAIL_APP_PASSWORD
+    to: []
     toKeyName: GMAIL_TO
+    cc: []
+    bcc: []
     fromName: AI Daily
+    subject: AI Daily
+    smtpHost: smtp.gmail.com
+    smtpPort: 587
+    useTLS: true
+    useSSL: false
+    timeout: 30
 ```
 
 ### 5. 运行程序
@@ -120,18 +130,21 @@ docker compose up -d --build
 
 ## 配置详解
 
-配置文件是根目录的 `config.yaml`。
+配置文件是根目录的 `config.yaml`，启动时用 Pydantic 模型完整校验。
+
+下表所有字段都是必填，程序不会替你补默认值。配置文件缺失、YAML 写错、少字段、多写了不认识的字段，或者值不合法（比如分数超出 `0-100`、cron 表达式无效、`hot_threshold` 低于 `min_score`），启动时会打印具体的错误位置并直接退出。`base_opml` 与所有 prompt 路径相对 `config.yaml` 解析，也会在初始化时检查是否可读。
 
 ### sources - 订阅源管理
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `base_opml` | string | 基础 OPML 文件路径，默认 `resources/rss.opml` |
+| `base_opml` | string | 基础 OPML 文件路径，启动时必须存在 |
 | `sync.enabled` | boolean | 是否启用远端 OPML 同步 |
 | `sync.urls` | array | 远端 OPML 地址数组，每周拉取后合并去重 |
-| `sync.cron` | string | RSS 源列表同步 cron，默认 `0 4 * * 0`，即每周日 04:00 |
+| `sync.cron` | string | RSS 源列表同步 cron |
 | `sync.backup` | boolean | 替换前是否生成 `.bak` 备份 |
 | `sync.timeout` | number | 单个远端 OPML 请求超时时间，单位秒 |
+| `sync.title` | string | 写入生成 OPML 的标题 |
 | `add` | array | 自定义添加的 RSS 源，结构为 `{title, xmlUrl, category}` |
 | `block` | array | 手动屏蔽的 RSS 源，按 `xmlUrl` 精确匹配 |
 | `block_domains` | array | 域名屏蔽，支持 `*.substack.com` 这类通配符 |
@@ -147,7 +160,7 @@ docker compose up -d --build
 | `context_days` | number | 汇总和即时推送查重时读取的近期天数 |
 | `keep_days` | number | `news-data/` 旧文件保留天数 |
 | `push_context_days` | number | 定时汇总读取历史推送标题的天数 |
-| `no_content_marker` | string | LLM 判定无新内容时返回的标记，默认 `[NO_NEW_CONTENT]` |
+| `no_content_marker` | string | LLM 判定无新内容时返回的标记 |
 
 ### schedule - 调度配置
 
@@ -158,7 +171,7 @@ docker compose up -d --build
 | `push_cron` | array | 定时推送 cron 表达式数组 |
 | `timezone_hours` | number | 展示和归档使用的时区偏移，`8` 表示 UTC+8 |
 
-当前默认推送时间：
+配置示例中的推送时间：
 
 | 表达式 | 含义 |
 |--------|------|
@@ -185,6 +198,7 @@ cron 格式：`minute hour day month weekday`。
 | `max_prompt_chars` | number | 单个批次 prompt 最大字符数 |
 | `max_concurrent_batches` | number | 批量评分最大并发批次数 |
 | `max_retries` | number | LLM 请求失败后的最大重试次数 |
+| `startup_timeout_seconds` | number | 启动 LLM 可用性检查超时时间，单位秒 |
 | `prompts.score_batch` | string | 批量评分 prompt 路径 |
 | `prompts.domain.activity_domains` | array | 当前启用的领域列表 |
 | `prompts.domain.domains[]` | array | 每个领域的评分标准、汇总和即时推送 prompt 配置 |
@@ -200,13 +214,15 @@ cron 格式：`minute hour day month weekday`。
 | `gmail.enabled` | boolean | 是否启用 Gmail SMTP 推送 |
 | `gmail.usernameKeyName` | string | Gmail 发件账号环境变量名 |
 | `gmail.passwordKeyName` | string | Gmail App Password 环境变量名 |
-| `gmail.to` | string/array | 收件人邮箱，可直接写配置 |
-| `gmail.toKeyName` | string | 收件人邮箱环境变量名，未配置 `to` 时使用 |
-| `gmail.cc` / `gmail.bcc` | string/array | 可选抄送/密送邮箱 |
+| `gmail.to` | string/array | 收件人邮箱，可为空并从环境变量读取 |
+| `gmail.toKeyName` | string | 收件人邮箱环境变量名 |
+| `gmail.cc` / `gmail.bcc` | string/array | 抄送/密送邮箱，可为空 |
 | `gmail.fromName` | string | 发件人显示名称 |
-| `gmail.smtpHost` | string | SMTP 地址，默认 `smtp.gmail.com` |
-| `gmail.smtpPort` | number | SMTP 端口，默认 `587` |
+| `gmail.subject` | string | 未显式传入标题时的邮件主题 |
+| `gmail.smtpHost` | string | SMTP 地址 |
+| `gmail.smtpPort` | number | SMTP 端口 |
 | `gmail.useTLS` / `gmail.useSSL` | boolean | STARTTLS 或 SSL 开关 |
+| `gmail.timeout` | number | SMTP 连接超时时间，单位秒 |
 
 Gmail 会发送 `multipart/alternative` 邮件：纯文本部分保留 Markdown，HTML 部分渲染为可读邮件正文。
 
@@ -279,7 +295,7 @@ totalEntries: 8
 pytest tests/test_flow.py -v
 ```
 
-`tests/test_flow.py` 默认读取根目录 `config.yaml`，覆盖配置接口、RSS 源合并、HTML 转 Markdown、fake LLM 评分、domain digest、存储筛选和 Gmail 邮件构建。
+`tests/test_flow.py` 默认读取根目录 `config.yaml`，覆盖配置校验、非法配置退出、RSS 源合并、HTML 转 Markdown、fake LLM 评分、domain digest、存储筛选和 Gmail 邮件构建。
 
 真实 RSS、LLM 和推送调试默认关闭。需要调试时直接修改 `tests/test_flow.py` 顶部开关：
 
@@ -366,7 +382,7 @@ sources:
 ai-daily/
 ├── src/
 │   ├── main.py          # 入口 + fetch/push 双循环
-│   ├── config.py        # 配置加载、OPML 解析、源合并
+│   ├── config.py        # 配置模型与校验、OPML 解析、源合并
 │   ├── fetcher.py       # RSS 抓取
 │   ├── llm.py           # LLM 评分、即时推送、domain 汇总
 │   ├── processor.py     # HTML 转 Markdown

@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from src.config import LLMConfig, get_config
+
 
 # 仅重试临时性 HTTP 故障；认证、请求参数和上下文超限等 4xx 错误需要人工修复。
 RETRYABLE_STATUS_CODES = frozenset(
@@ -76,17 +78,17 @@ def load_prompt(prompt_path: str, **kwargs) -> str:
 
 
 async def call_llm(
-    prompt: str, config: Dict, response_format: Optional[Dict] = None
+    prompt: str, response_format: Optional[Dict] = None
 ) -> str:
     """调用LLM API - 统一使用OpenAI兼容接口"""
-    model = config.get("model", "gpt-4o-mini")
-    base_url = config.get("baseUrl", "https://api.openai.com/v1")
-    api_key_name = config.get("apiKeyName", "OPENAI_API_KEY")
-    max_retries = config.get("max_retries", 3)
+    config = get_config().llm
+    model = config.model
+    base_url = config.baseUrl
+    max_retries = config.max_retries
 
-    api_key = os.environ.get(api_key_name)
+    api_key = os.environ.get(config.apiKeyName)
     if not api_key:
-        raise ValueError(f"未设置{api_key_name}环境变量")
+        raise ValueError(f"未设置{config.apiKeyName}环境变量")
 
     import aiohttp
 
@@ -128,14 +130,13 @@ async def call_llm(
     raise last_error
 
 
-async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:
+async def check_llm_available() -> str:
     """启动时检查 LLM 接口可用性"""
+    timeout_seconds = get_config().llm.startup_timeout_seconds
     prompt = "Reply with OK only."
 
     try:
-        response = await asyncio.wait_for(
-            call_llm(prompt, config), timeout=timeout_seconds
-        )
+        response = await asyncio.wait_for(call_llm(prompt), timeout=timeout_seconds)
     except asyncio.TimeoutError as exc:
         raise RuntimeError(f"LLM可用性检查超时({timeout_seconds}s)") from exc
     except Exception as exc:
@@ -148,15 +149,8 @@ async def check_llm_available(config: Dict, timeout_seconds: int = 15) -> str:
     return response_text
 
 
-def _build_batch_prompt(
-    config: Dict,
-    entries: List[Dict] = None,
-) -> str:
+def _build_batch_prompt(config: LLMConfig, entries: List[Dict]) -> str:
     """构建批量评分prompt"""
-    if entries is None:
-        entries = config
-        config = {}
-
     # 构建评分标准
     score_standard = _build_score_standard(config)
     # 构建领域列表
@@ -175,58 +169,32 @@ def _build_batch_prompt(
     ]
     entries_json = compact_json(entries_for_llm)
 
-    # 从文件加载提示词模板，如果未指定则使用默认路径
-    prompt_path = config.get("prompts", {}).get("score_batch")
-
-    if not prompt_path:
-        raise ValueError("没有配置score_batch")
-
-    if prompt_path is None:
-        prompt_path = "prompts/score_batch.md"
-
     return load_prompt(
-        prompt_path,
+        config.prompts.score_batch,
         entries_json=entries_json,
         score_standard=score_standard,
         domain_list=domain_list,
     )
 
-def _build_domain_list(config: Dict):
-    domain_config = config.get("prompts", {}).get("domain", {})
-    active_domains = domain_config.get("activity_domains", [])
-    return compact_json(active_domains)
 
-def _build_score_standard(config: Dict) -> str:
+def _build_domain_list(config: LLMConfig) -> str:
+    return compact_json(config.prompts.domain.activity_domains)
+
+
+def _build_score_standard(config: LLMConfig) -> str:
     """Build enabled domain score standards from prompt files."""
-    domain_config = config.get("prompts", {}).get("domain", {})
-    active_domains = set(domain_config.get("activity_domains", []))
+    domain_config = config.prompts.domain
+    active_domains = set(domain_config.activity_domains)
     standards = []
 
-    for domain in domain_config.get("domains", []):
-        key = domain.get("key", "")
-        score_standard_path = domain.get("score_standard", "")
-        if not key or key not in active_domains or not score_standard_path:
+    for domain in domain_config.domains:
+        if domain.key not in active_domains:
             continue
 
-        standard_content = load_prompt(score_standard_path).strip()
-        standards.append(f"### {key}\n{standard_content}")
+        standard_content = load_prompt(domain.score_standard).strip()
+        standards.append(f"### {domain.key}\n{standard_content}")
 
     return "\n".join(standards)
-
-
-def _get_domain_prompt_path(
-    config: Dict, domain: str, prompt_key: str
-) -> Optional[str]:
-    """按 domain 选择提示词路径，未配置时回退到全局提示词。"""
-    prompts = config.get("prompts", {})
-    domain_name = (domain or "").strip()
-
-    domain_config = prompts.get("domain", {})
-    for domain_item in domain_config.get("domains", []):
-        if domain_item.get("key") == domain_name and domain_item.get(prompt_key):
-            return domain_item[prompt_key]
-
-    return prompts.get(prompt_key)
 
 
 def _parse_llm_json_response(response: str) -> List[Dict]:
@@ -314,8 +282,8 @@ def _parse_score_response(response: str) -> List[Dict]:
 
 def _split_entries_for_batch(
         entries: List[Dict],
-        max_prompt_chars: int = 10000,
-        prompt_chars: int = 100
+        max_prompt_chars: int,
+        prompt_chars: int,
 ) -> List[List[Dict]]:
     """将entries分成多个批次，每批不超过max_prompt_chars字符"""
     if not entries:
@@ -392,7 +360,7 @@ def _reconcile_batch_results(
 
 
 async def _score_single_batch(
-    entries: List[Dict], config: Dict, batch_index: int = 0
+    entries: List[Dict], config: LLMConfig, batch_index: int = 0
 ) -> List[Dict]:
     """对单批entries进行评分"""
     # 从config获取批量评分提示词路径
@@ -400,9 +368,7 @@ async def _score_single_batch(
     prompt = _build_batch_prompt(config, entries)
 
     try:
-        response = await call_llm(
-            prompt, config, response_format={"type": "json_object"}
-        )
+        response = await call_llm(prompt, response_format={"type": "json_object"})
         results = _parse_score_response(response)
 
         if not isinstance(results, list):
@@ -416,9 +382,7 @@ async def _score_single_batch(
         return []
 
 
-async def score_batch(
-    entries: List[Dict], config: Dict
-) -> List[Dict]:
+async def score_batch(entries: List[Dict]) -> List[Dict]:
     """
     批量评分 - 智能分批处理
 
@@ -426,12 +390,14 @@ async def score_batch(
     - 小批量：一次性发送
     - 大批量：分成多个批次并行处理
     """
+    config = get_config().llm
+
     if not entries:
         return []
 
     # 获取分批配置
-    max_prompt_chars = config.get("max_prompt_chars", 10000)
-    max_concurrent_batches = config.get("max_concurrent_batches", 3)
+    max_prompt_chars = config.max_prompt_chars
+    max_concurrent_batches = config.max_concurrent_batches
     # 分批
     prompt_chars = len(_build_batch_prompt(config, []))
     batches = _split_entries_for_batch(entries, max_prompt_chars, prompt_chars)
@@ -520,7 +486,6 @@ def _get_push_prompt_entries(entries: List[Dict]) -> List[Dict]:
 
 async def generate_immediate_push(
     entries: List[Dict],
-    config: Dict,
     recent_push_context: str = "",
     domain: str = None,
 ) -> Tuple[str, Optional[str]]:
@@ -528,12 +493,12 @@ async def generate_immediate_push(
 
     Args:
         entries: 原始entries列表（调用方已筛选好高分条目）
-        config: LLM配置
         recent_push_context: 近期推送上下文，用于去重
         domain: 当前快讯所属 domain，用于选择 domain 专属即时推送 prompt
     """
+    config = get_config().llm
     try:
-        prompt_path = _get_domain_prompt_path(config, domain, "immediate_push")
+        prompt_path = config.prompts.domain.prompt_for(domain, "immediate_push")
         if not prompt_path:
             raise ValueError(f"未配置 domain={domain or ''} 的 immediate_push prompt")
 
@@ -547,7 +512,7 @@ async def generate_immediate_push(
             recent_push_context=recent_push_context,
         )
 
-        return await call_llm(prompt, config), None
+        return await call_llm(prompt), None
     except Exception as e:
         error_message = f"生成即时推送失败: {e}"
         print(f"⚠️ {error_message}")
@@ -557,7 +522,6 @@ async def generate_immediate_push(
 async def compose_digest(
     entries: List[Dict],
     context: List[Dict],
-    config: Dict,
     recent_push_context: str = "",
     domain: str = None,
 ) -> str:
@@ -566,11 +530,11 @@ async def compose_digest(
     Args:
         entries: 原始entries列表
         context: 历史碎片化信息（用于去重参考），只保留 title, published, tags, summary, source
-        config: LLM配置
         recent_push_context: 近期汇总推送上下文，用于去重
         domain: 当前汇总所属 domain，用于选择 domain 专属 digest prompt
     """
-    prompt_path = _get_domain_prompt_path(config, domain, "digest")
+    config = get_config().llm
+    prompt_path = config.prompts.domain.prompt_for(domain, "digest")
     if not prompt_path:
         raise ValueError(f"未配置 domain={domain or ''} 的 digest prompt")
 
@@ -589,7 +553,7 @@ async def compose_digest(
     # 裁剪字符数
     digest_entries = list(entries)
     original_entry_count = len(digest_entries)
-    max_input_tokens = int(config.get("digest_max_input_tokens", 20000))
+    max_input_tokens = config.digest_max_input_tokens
 
     while True:
         new_entries = _get_push_prompt_entries(digest_entries)
@@ -624,6 +588,6 @@ async def compose_digest(
         )
 
     try:
-        return await call_llm(prompt, config)
+        return await call_llm(prompt)
     except Exception:
         raise

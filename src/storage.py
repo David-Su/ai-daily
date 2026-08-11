@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 from rapidfuzz import fuzz
 
-from src.config import get_timezone
+from src.config import get_config, get_timezone
 
 DEFAULT_PUSH_DOMAIN = "未分类"
 
@@ -165,13 +165,12 @@ def _push_file_sort_key(filepath: Path):
     return (push_time or datetime.min.replace(tzinfo=get_timezone()), str(filepath))
 
 
-def load_recent_notify_titles(
-    context_days: int = 3, data_dir: str = "news-data", domain: str = None
-) -> str:
+def load_recent_notify_titles(data_dir: str = "news-data", domain: str = None) -> str:
     """加载最近 context_days 天 notify 文件的事件标题清单（仅供 LLM 查重）
 
     返回紧凑的纯文本清单，每行一条事件，避免把成品推送当成风格范例传回 LLM。
     """
+    context_days = get_config().filter.context_days
     data_path = Path(data_dir)
     if not data_path.exists():
         return ""
@@ -203,8 +202,8 @@ def load_recent_notify_titles(
     return "\n".join(f"- [{t}] {title}" if t else f"- {title}" for t, title in items)
 
 
-def load_recent_push_titles(
-    context_days: int = 3, data_dir: str = "news-data", domain: str = None
+def _load_recent_push_titles(
+    context_days: int, data_dir: str = "news-data", domain: str = None
 ) -> str:
     """加载最近 context_days 天 push 文件的事件标题清单（仅供 LLM 查重）"""
     data_path = Path(data_dir)
@@ -243,6 +242,26 @@ def load_recent_push_titles(
         )
 
     return "\n".join(f"- [{t}] {title}" if t else f"- {title}" for t, title in items)
+
+
+def load_recent_push_titles(data_dir: str = "news-data", domain: str = None) -> str:
+    """加载汇总推送的历史标题，使用全局配置的 push_context_days。"""
+    return _load_recent_push_titles(
+        get_config().filter.push_context_days,
+        data_dir=data_dir,
+        domain=domain,
+    )
+
+
+def load_recent_push_titles_for_immediate_push(
+    data_dir: str = "news-data", domain: str = None
+) -> str:
+    """加载即时推送查重所需的历史汇总标题，使用 context_days。"""
+    return _load_recent_push_titles(
+        get_config().filter.context_days,
+        data_dir=data_dir,
+        domain=domain,
+    )
 
 
 def get_last_push_file(data_dir: str = "news-data", domain: str = None) -> Optional[str]:
