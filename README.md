@@ -76,19 +76,15 @@ llm:
   max_retries: 3
   startup_timeout_seconds: 15
   prompts:
-    domain:
-      activity_domains:
-        - AI
-        - Investment
-      domains:
-        - key: AI
-          score_standard: prompts/score/ai/score_standard.md
-          digest: prompts/digest/ai/digest.md
-          immediate_push: prompts/immediate/ai/immediate_push.md
-        - key: Investment
-          score_standard: prompts/score/investment/score_standard.md
-          digest: prompts/digest/investment/digest.md
-          immediate_push: prompts/immediate/investment/immediate_push.md
+    domains:
+      AI:
+        score_standard: prompts/score/ai/score_standard.md
+        digest: prompts/digest/ai/digest.md
+        immediate_push: prompts/immediate/ai/immediate_push.md
+      Investment:
+        score_standard: prompts/score/investment/score_standard.md
+        digest: prompts/digest/investment/digest.md
+        immediate_push: prompts/immediate/investment/immediate_push.md
     score_batch: prompts/score/score_batch.md
 push:
   discord:
@@ -113,6 +109,10 @@ push:
     useSSL: false
     timeout: 30
 ```
+
+> **配置迁移**：旧的 `llm.prompts.domain.activity_domains` 与
+> `llm.prompts.domain.domains` 已不再支持。将每个 `{key, ...}` 列表项改为
+> `llm.prompts.domains.<key>` 映射项即可；映射声明顺序即为处理顺序。
 
 ### 5. 运行程序
 
@@ -200,8 +200,7 @@ cron 格式：`minute hour day month weekday`。
 | `max_retries` | number | LLM 请求失败后的最大重试次数 |
 | `startup_timeout_seconds` | number | 启动 LLM 可用性检查超时时间，单位秒 |
 | `prompts.score_batch` | string | 批量评分 prompt 路径 |
-| `prompts.domain.activity_domains` | array | 当前启用的领域列表 |
-| `prompts.domain.domains[]` | array | 每个领域的评分标准、汇总和即时推送 prompt 配置 |
+| `prompts.domains` | mapping | 所有声明的领域均启用；映射声明顺序决定处理和推送顺序，每项配置评分、汇总和即时推送 prompt 路径 |
 
 ### push - 推送平台配置
 
@@ -330,8 +329,7 @@ sources:
 1. 在 `prompts/score/<domain>/score_standard.md` 写评分标准。
 2. 在 `prompts/digest/<domain>/digest.md` 写该领域的汇总 prompt。
 3. 在 `prompts/immediate/<domain>/immediate_push.md` 写该领域的即时推送 prompt。
-4. 在 `config.yaml` 的 `llm.prompts.domain.domains` 增加 `{key, score_standard, digest, immediate_push}`。
-5. 把 `key` 加入 `llm.prompts.domain.activity_domains`。
+4. 在 `config.yaml` 的 `llm.prompts.domains` 增加以领域名为键的映射项，并配置 `score_standard`、`digest`、`immediate_push`。
 
 ### 添加新的推送平台
 

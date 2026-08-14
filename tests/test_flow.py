@@ -31,7 +31,12 @@ from src.llm import (
     generate_immediate_push,
     score_batch,
 )
-from src.main import collect_entries_for_domain_pushes
+from src.main import (
+    collect_entries_for_domain_pushes,
+    get_domain_order,
+    run_fetch_job,
+    sort_domains,
+)
 from src.processor import html_to_markdown
 from src.push import send_to_platforms
 from src.push.gmail import GmailPlatform
@@ -118,7 +123,7 @@ def _domain(config):
     """选择测试用 domain；默认取配置里的第一个活跃 domain，可用 DEBUG_DOMAIN 手动指定。"""
     if DEBUG_DOMAIN:
         return DEBUG_DOMAIN
-    return config.llm.prompts.domain.activity_domains[0]
+    return next(iter(config.llm.prompts.domains))
 
 
 def _sample_entries(domain):
@@ -159,11 +164,42 @@ def test_config_interface_and_prompt_files():
     prompts = config.llm.prompts
     assert Path(prompts.score_batch).exists()
 
-    domains = {item.key: item for item in prompts.domain.domains}
-    for domain in prompts.domain.activity_domains:
-        assert Path(domains[domain].score_standard).exists()
-        assert Path(domains[domain].digest).exists()
-        assert Path(domains[domain].immediate_push).exists()
+    assert list(prompts.domains) == ["AI", "Investment"]
+    for domain_config in prompts.domains.values():
+        assert Path(domain_config.score_standard).exists()
+        assert Path(domain_config.digest).exists()
+        assert Path(domain_config.immediate_push).exists()
+
+
+def test_load_config_rejects_incomplete_domain_prompt_mapping(tmp_path, caplog):
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    del raw["llm"]["prompts"]["domains"]["AI"]["digest"]
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit):
+            load_config(str(path))
+
+    assert "llm.prompts.domains.AI.digest" in caplog.text
+
+
+def test_load_config_rejects_legacy_domain_schema(tmp_path, caplog):
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["llm"]["prompts"]["domain"] = {"activity_domains": ["AI"]}
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit):
+            load_config(str(path))
+
+    assert "llm.prompts.domain" in caplog.text
+
+
+def test_declared_domain_order_controls_processing_order():
+    assert get_domain_order() == ["AI", "Investment"]
+    assert sort_domains(["Investment", "AI"]) == ["AI", "Investment"]
 
 
 @pytest.mark.parametrize(
@@ -608,9 +644,7 @@ async def test_immediate_push_uses_domain_prompt(monkeypatch):
     import src.llm as llm_module
 
     config = _config()
-    domains = {
-        item.key: item for item in config.llm.prompts.domain.domains
-    }
+    domains = config.llm.prompts.domains
     domain = "Investment" if "Investment" in domains else _domain(config)
     entries = _sample_entries(domain)
     entries[0]["score"] = 95
@@ -632,6 +666,67 @@ async def test_immediate_push_uses_domain_prompt(monkeypatch):
 
     assert error is None
     assert content.startswith("# Immediate")
+
+
+@pytest.mark.asyncio
+async def test_fetch_job_excludes_unconfigured_domain_results(tmp_path, monkeypatch):
+    import src.main as main_module
+
+    configured_domain = _domain(_config())
+    raw_entries = [
+        {
+            "title": "Configured entry",
+            "link": "https://example.com/configured",
+            "published": datetime.now(timezone.utc),
+            "source": "Example",
+            "content": "Configured content",
+        },
+        {
+            "title": "Unknown entry",
+            "link": "https://example.com/unknown",
+            "published": datetime.now(timezone.utc),
+            "source": "Example",
+            "content": "Unknown content",
+        },
+    ]
+    fetch_file = tmp_path / "fetch.json"
+
+    async def fake_fetch_all_feeds(_sources, _cutoff):
+        return raw_entries
+
+    async def fake_score_batch(entries):
+        return [
+            {
+                **entries[0],
+                "domain": configured_domain,
+                "score": 80,
+                "summary": "Configured summary",
+                "tags": [],
+            },
+            {
+                **entries[1],
+                "domain": "Unknown",
+                "score": 80,
+                "summary": "Unknown summary",
+                "tags": [],
+            },
+        ]
+
+    monkeypatch.setattr(
+        main_module,
+        "merge_sources",
+        lambda: [{"xmlUrl": "https://example.com/feed"}],
+    )
+    monkeypatch.setattr(main_module, "fetch_all_feeds", fake_fetch_all_feeds)
+    monkeypatch.setattr(main_module, "score_batch", fake_score_batch)
+    monkeypatch.setattr(main_module, "get_fetch_file", lambda: str(fetch_file))
+    monkeypatch.setattr(main_module, "cleanup_old_files", lambda **_kwargs: None)
+
+    await run_fetch_job()
+
+    assert [entry["domain"] for entry in read_entries(str(fetch_file))] == [
+        configured_domain
+    ]
 
 
 def test_notify_titles_are_scoped_by_domain(tmp_path):

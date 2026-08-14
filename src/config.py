@@ -130,45 +130,15 @@ class FetchConfig(ConfigModel):
 class DomainPromptConfig(ConfigModel):
     """单个 domain 的 prompt 路径"""
 
-    key: NonEmptyStr
     score_standard: NonEmptyStr
     digest: NonEmptyStr
     immediate_push: NonEmptyStr
 
 
-class DomainConfig(ConfigModel):
-    """domain 启用列表与 prompt 映射"""
-
-    activity_domains: Tuple[NonEmptyStr, ...] = Field(min_length=1)
-    domains: Tuple[DomainPromptConfig, ...] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def check_active_domains_configured(self) -> "DomainConfig":
-        configured = [item.key for item in self.domains]
-        duplicated = {key for key in configured if configured.count(key) > 1}
-        if duplicated:
-            raise ValueError(f"domains 存在重复的 key: {sorted(duplicated)}")
-
-        missing = [key for key in self.activity_domains if key not in configured]
-        if missing:
-            raise ValueError(
-                f"activity_domains 中的 {missing} 未在 domains 中配置 prompt"
-            )
-        return self
-
-    def prompt_for(self, domain: str, prompt_key: str) -> Optional[str]:
-        """按 domain 取指定类型的 prompt 路径。"""
-        target = (domain or "").strip()
-        for item in self.domains:
-            if item.key == target:
-                return getattr(item, prompt_key)
-        return None
-
-
 class PromptsConfig(ConfigModel):
     """prompt 路径集合"""
 
-    domain: DomainConfig
+    domains: Dict[NonEmptyStr, DomainPromptConfig] = Field(min_length=1)
     score_batch: NonEmptyStr
 
 
@@ -382,19 +352,18 @@ def _resolve_path(value: str, config_dir: Path) -> Path:
 
 def _validate_local_resources(config: AppConfig, config_dir: Path) -> AppConfig:
     """解析并检查配置引用的本地文件，避免启动后才发现路径错误。"""
-    prompt_domains = tuple(
-        item.model_copy(
+    prompt_domains = {
+        key: item.model_copy(
             update={
                 "score_standard": str(_resolve_path(item.score_standard, config_dir)),
                 "digest": str(_resolve_path(item.digest, config_dir)),
                 "immediate_push": str(_resolve_path(item.immediate_push, config_dir)),
             }
         )
-        for item in config.llm.prompts.domain.domains
-    )
-    prompts_domain = config.llm.prompts.domain.model_copy(update={"domains": prompt_domains})
+        for key, item in config.llm.prompts.domains.items()
+    }
     prompts = config.llm.prompts.model_copy(update={
-        "domain": prompts_domain,
+        "domains": prompt_domains,
         "score_batch": str(_resolve_path(config.llm.prompts.score_batch, config_dir)),
     })
     llm = config.llm.model_copy(update={"prompts": prompts})
@@ -408,8 +377,8 @@ def _validate_local_resources(config: AppConfig, config_dir: Path) -> AppConfig:
         ("llm.prompts.score_batch", resolved.llm.prompts.score_batch),
     ]
     paths.extend(
-        (f"llm.prompts.domain.domains[{item.key}].{field_name}", getattr(item, field_name))
-        for item in resolved.llm.prompts.domain.domains
+        (f"llm.prompts.domains.{key}.{field_name}", getattr(item, field_name))
+        for key, item in resolved.llm.prompts.domains.items()
         for field_name in ("score_standard", "digest", "immediate_push")
     )
     for location, raw_path in paths:

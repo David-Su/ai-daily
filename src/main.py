@@ -47,9 +47,6 @@ from src.storage import (
     save_push_file,
 )
 
-DEFAULT_PUSH_DOMAIN = "未分类"
-
-
 def is_immediate_push_forbidden() -> bool:
     config = get_config()
     curr_time = now_local().time()
@@ -114,27 +111,9 @@ def parse_time_to_local(time_str: str) -> Optional[datetime]:
         return None
 
 
-def normalize_entry_domain(entry: Dict) -> str:
-    """读取 entry 的 domain，缺失时归到未分类。"""
-    domain = str(entry.get("domain") or "").strip()
-    return domain or DEFAULT_PUSH_DOMAIN
-
-
 def get_domain_order() -> List[str]:
     """从配置读取 domain 顺序，用于稳定推送顺序。"""
-    config = get_config()
-    domain_config = config.llm.prompts.domain
-    configured_domains = [item.key for item in domain_config.domains]
-
-    order = []
-    for domain in [
-        *domain_config.activity_domains,
-        *configured_domains,
-        DEFAULT_PUSH_DOMAIN,
-    ]:
-        if domain not in order:
-            order.append(domain)
-    return order
+    return list(get_config().llm.prompts.domains)
 
 
 def sort_domains(domains: List[str]) -> List[str]:
@@ -142,23 +121,6 @@ def sort_domains(domains: List[str]) -> List[str]:
     order = get_domain_order()
     order_index = {domain: index for index, domain in enumerate(order)}
     return sorted(domains, key=lambda d: (order_index.get(d, len(order_index)), d))
-
-
-def calculate_push_times(cron_list: List[str], offset_days: int = 0) -> List[datetime]:
-    base_date = datetime.now(get_timezone()).date() + timedelta(days=offset_days)
-    times = []
-    for cron in cron_list:
-        try:
-            minute, hour, _, _, _ = cron.split()
-            t = datetime.combine(
-                base_date,
-                datetime.strptime(f"{hour}:{minute}", "%H:%M").time(),
-                tzinfo=get_timezone(),
-            )
-            times.append(t)
-        except ValueError:
-            continue
-    return sorted(times)
 
 
 def collect_entries_for_domain_pushes(data_dir: str = "news-data") -> Dict[str, Dict]:
@@ -296,9 +258,9 @@ async def run_fetch_job():
 
     scored = await score_batch(new_entries)
 
-    # 筛选出符合domain要求的entry,llm已经只输出domain在activity_domains中的元素,保险起见再清理一遍
-    activity_domains = set(config.llm.prompts.domain.activity_domains)
-    scored = [entry for entry in scored if entry["domain"] in activity_domains]
+    # 仅保留已声明领域的评分结果。
+    configured_domains = set(config.llm.prompts.domains)
+    scored = [entry for entry in scored if entry["domain"] in configured_domains]
 
     is_new_file = not os.path.exists(fetch_file)
     if is_new_file:

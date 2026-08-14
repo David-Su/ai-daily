@@ -165,7 +165,7 @@ payload = {
 `score_batch(entries, config)`：
 
 1. 读取 `prompts.score_batch`。
-2. 从 `prompts.domain.activity_domains` 构建可选领域列表。
+2. 从 `prompts.domains` 的键构建有序的可选领域列表。
 3. 读取启用 domain 的 `score_standard`，拼进评分 prompt。
 4. 根据 `max_prompt_chars` 自动分批。
 5. 使用 `max_concurrent_batches` 控制并发。
@@ -175,7 +175,7 @@ payload = {
 `generate_immediate_push()`：
 
 - 必须传入 `domain`。
-- 通过 `llm.prompts.domain.domains[].immediate_push` 查找 domain 专属即时推送 prompt。
+- 通过 `llm.prompts.domains.<domain>.immediate_push` 查找 domain 专属即时推送 prompt。
 - 传入本次热点条目和近期 notify/push 标题。
 - 待推送条目会移除 `summary` 字段；当 `content` 为空时，用评分阶段生成的 `summary` 补充到 `content`。
 - 失败时返回空内容和错误信息，由调用方告警并跳过本次即时推送。
@@ -183,7 +183,7 @@ payload = {
 `compose_digest()`：
 
 - 必须传入 `domain`。
-- 通过 `llm.prompts.domain.domains[].digest` 查找 domain 专属汇总 prompt。
+- 通过 `llm.prompts.domains.<domain>.digest` 查找 domain 专属汇总 prompt。
 - 未配置对应 digest 时直接报错。
 - 传入待推送条目、历史上下文和近期 push 标题；待推送条目同样会移除 `summary` 字段，并在正文为空时用 `summary` 补充 `content`。
 
@@ -266,7 +266,7 @@ platforms = {
 - 所有字段都是必填，代码中不设默认值，配置里缺什么就报什么。
 - 禁止未知字段（`extra="forbid"`），拼错的键名会直接报错而不是被忽略。
 - 值域约束：分数类字段限定 `0-100`，时长与并发类字段必须大于 0，`timezone_hours` 限定 `-12` 到 `14`。
-- 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`activity_domains` 中的 domain 必须在 `prompts.domain.domains` 里配好 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
+- 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`prompts.domains` 必须至少声明一个领域，且每个领域必须配好三类 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
 - 初始化时还会解析相对路径并检查 prompt 与 `base_opml` 文件可读，避免进入循环后才失败。
 
 配置文件缺失、YAML 语法错误、顶层不是映射，或任一字段校验失败时，`load_config()` 会用 `logging` 打印失败原因和逐条问题位置，然后 `sys.exit(1)` 退出，不进入主流程。
@@ -309,19 +309,15 @@ llm:
   max_retries: 3
   startup_timeout_seconds: 15
   prompts:
-    domain:
-      activity_domains:
-        - AI
-        - Investment
-      domains:
-        - key: AI
-          score_standard: prompts/score/ai/score_standard.md
-          digest: prompts/digest/ai/digest.md
-          immediate_push: prompts/immediate/ai/immediate_push.md
-        - key: Investment
-          score_standard: prompts/score/investment/score_standard.md
-          digest: prompts/digest/investment/digest.md
-          immediate_push: prompts/immediate/investment/immediate_push.md
+    domains:
+      AI:
+        score_standard: prompts/score/ai/score_standard.md
+        digest: prompts/digest/ai/digest.md
+        immediate_push: prompts/immediate/ai/immediate_push.md
+      Investment:
+        score_standard: prompts/score/investment/score_standard.md
+        digest: prompts/digest/investment/digest.md
+        immediate_push: prompts/immediate/investment/immediate_push.md
     score_batch: prompts/score/score_batch.md
 push:
   discord:
@@ -433,8 +429,7 @@ ai-daily/
 1. 新增评分标准文件，例如 `prompts/score/<domain>/score_standard.md`。
 2. 新增摘要 prompt，例如 `prompts/digest/<domain>/digest.md`。
 3. 新增即时推送 prompt，例如 `prompts/immediate/<domain>/immediate_push.md`。
-4. 在 `config.yaml` 的 `llm.prompts.domain.domains` 中添加配置。
-5. 在 `llm.prompts.domain.activity_domains` 中启用该 domain。
+4. 在 `config.yaml` 的 `llm.prompts.domains` 中以领域名为键添加配置；该领域随即启用，声明位置决定处理顺序。
 
 ### 添加新源
 

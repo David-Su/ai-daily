@@ -178,58 +178,18 @@ def _build_batch_prompt(config: LLMConfig, entries: List[Dict]) -> str:
 
 
 def _build_domain_list(config: LLMConfig) -> str:
-    return compact_json(config.prompts.domain.activity_domains)
+    return compact_json(list(config.prompts.domains))
 
 
 def _build_score_standard(config: LLMConfig) -> str:
     """Build enabled domain score standards from prompt files."""
-    domain_config = config.prompts.domain
-    active_domains = set(domain_config.activity_domains)
     standards = []
 
-    for domain in domain_config.domains:
-        if domain.key not in active_domains:
-            continue
-
-        standard_content = load_prompt(domain.score_standard).strip()
-        standards.append(f"### {domain.key}\n{standard_content}")
+    for domain, prompts in config.prompts.domains.items():
+        standard_content = load_prompt(prompts.score_standard).strip()
+        standards.append(f"### {domain}\n{standard_content}")
 
     return "\n".join(standards)
-
-
-def _parse_llm_json_response(response: str) -> List[Dict]:
-    """解析LLM返回的JSON响应"""
-    text = response.strip()
-
-    # 尝试去除markdown代码块
-    if text.startswith("```json"):
-        text = text[7:]
-    elif text.startswith("```"):
-        text = text[3:]
-
-    if text.endswith("```"):
-        text = text[:-3]
-
-    text = text.strip()
-
-    # 尝试查找JSON数组
-    if text.startswith("[") and text.endswith("]"):
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            print("⚠️ 直接解析JSON失败，尝试从文本中提取JSON数组")
-            pass
-
-    # 尝试从文本中提取JSON数组
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            print("⚠️ 从文本中提取JSON数组失败")
-            pass
-
-    raise ValueError(f"无法从响应中解析JSON: {response[:200]}...")
 
 
 def _parse_score_response(response: str) -> List[Dict]:
@@ -498,15 +458,15 @@ async def generate_immediate_push(
     """
     config = get_config().llm
     try:
-        prompt_path = config.prompts.domain.prompt_for(domain, "immediate_push")
-        if not prompt_path:
+        prompts = config.prompts.domains.get((domain or "").strip())
+        if not prompts:
             raise ValueError(f"未配置 domain={domain or ''} 的 immediate_push prompt")
 
         new_entries = _get_push_prompt_entries(entries)
 
         # 直接使用传入的entries，转为JSON格式传给prompt
         prompt = load_prompt(
-            prompt_path,
+            prompts.immediate_push,
             count=len(new_entries),
             entries=compact_json(new_entries),
             recent_push_context=recent_push_context,
@@ -534,8 +494,8 @@ async def compose_digest(
         domain: 当前汇总所属 domain，用于选择 domain 专属 digest prompt
     """
     config = get_config().llm
-    prompt_path = config.prompts.domain.prompt_for(domain, "digest")
-    if not prompt_path:
+    prompts = config.prompts.domains.get((domain or "").strip())
+    if not prompts:
         raise ValueError(f"未配置 domain={domain or ''} 的 digest prompt")
 
     # context 只保留必要字段，拼接成字符串
@@ -558,7 +518,7 @@ async def compose_digest(
     while True:
         new_entries = _get_push_prompt_entries(digest_entries)
         prompt = load_prompt(
-            prompt_path,
+            prompts.digest,
             count=len(new_entries),
             entries=compact_json(new_entries),
             context="\n\n".join(context_text),
