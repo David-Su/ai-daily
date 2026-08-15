@@ -253,7 +253,7 @@ platforms = {
 |------|------|
 | Discord | Webhook 发送纯文本，按 2000 字符切分 |
 | 飞书 | 发送 V2 interactive card，Markdown 元素按 8000 字符切分 |
-| Gmail | SMTP 发送 `multipart/alternative` 邮件，Markdown + HTML 双正文 |
+| Gmail | SMTP 发送 `multipart/alternative` 邮件，Markdown + HTML 双正文；端点固定 `smtp.gmail.com:587` STARTTLS |
 
 `send_to_platforms()` 从全局 `AppConfig` 遍历 `push_config.enabled_platforms()`，只发送到 `enabled=true` 的平台；`create_platform()` 在平台所需环境变量缺失时返回 `None` 并跳过。单个平台失败只打印错误，不中断其他平台。
 
@@ -330,17 +330,8 @@ push:
     enabled: true
     usernameKeyName: GMAIL_USERNAME
     passwordKeyName: GMAIL_APP_PASSWORD
-    to: []
     toKeyName: GMAIL_TO
-    cc: []
-    bcc: []
     fromName: AI Daily
-    subject: AI Daily
-    smtpHost: smtp.gmail.com
-    smtpPort: 587
-    useTLS: true
-    useSSL: false
-    timeout: 30
 
 sources:
   base_opml: resources/rss.opml
@@ -371,7 +362,7 @@ sources:
 | 飞书 Webhook | `FEISHU_WEBHOOK_URL` | 由 `push.feishu.apiKeyName` 指定 |
 | Gmail 发件账号 | `GMAIL_USERNAME` | 由 `push.gmail.usernameKeyName` 指定 |
 | Gmail App Password | `GMAIL_APP_PASSWORD` | 由 `push.gmail.passwordKeyName` 指定 |
-| Gmail 收件人 | `GMAIL_TO` | 由 `push.gmail.toKeyName` 指定 |
+| Gmail 收件人 | `GMAIL_TO` | 由 `push.gmail.toKeyName` 指定，支持逗号分隔多个地址 |
 
 ## 目录结构
 

@@ -97,17 +97,8 @@ push:
     enabled: true
     usernameKeyName: GMAIL_USERNAME
     passwordKeyName: GMAIL_APP_PASSWORD
-    to: []
     toKeyName: GMAIL_TO
-    cc: []
-    bcc: []
     fromName: AI Daily
-    subject: AI Daily
-    smtpHost: smtp.gmail.com
-    smtpPort: 587
-    useTLS: true
-    useSSL: false
-    timeout: 30
 ```
 
 > **配置迁移**：旧的 `llm.prompts.domain.activity_domains` 与
@@ -213,17 +204,10 @@ cron 格式：`minute hour day month weekday`。
 | `gmail.enabled` | boolean | 是否启用 Gmail SMTP 推送 |
 | `gmail.usernameKeyName` | string | Gmail 发件账号环境变量名 |
 | `gmail.passwordKeyName` | string | Gmail App Password 环境变量名 |
-| `gmail.to` | string/array | 收件人邮箱，可为空并从环境变量读取 |
-| `gmail.toKeyName` | string | 收件人邮箱环境变量名 |
-| `gmail.cc` / `gmail.bcc` | string/array | 抄送/密送邮箱，可为空 |
+| `gmail.toKeyName` | string | 收件人邮箱环境变量名，值支持逗号分隔多个地址 |
 | `gmail.fromName` | string | 发件人显示名称 |
-| `gmail.subject` | string | 未显式传入标题时的邮件主题 |
-| `gmail.smtpHost` | string | SMTP 地址 |
-| `gmail.smtpPort` | number | SMTP 端口 |
-| `gmail.useTLS` / `gmail.useSSL` | boolean | STARTTLS 或 SSL 开关 |
-| `gmail.timeout` | number | SMTP 连接超时时间，单位秒 |
 
-Gmail 会发送 `multipart/alternative` 邮件：纯文本部分保留 Markdown，HTML 部分渲染为可读邮件正文。
+Gmail 会发送 `multipart/alternative` 邮件：纯文本部分保留 Markdown，HTML 部分渲染为可读邮件正文。SMTP 端点固定为 `smtp.gmail.com:587`（STARTTLS），不通过配置暴露。
 
 ## 工作流程
 

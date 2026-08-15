@@ -35,7 +35,6 @@ EnvVarName = Annotated[
 ]
 Score = Annotated[int, Field(ge=0, le=100)]
 PositiveInt = Annotated[int, Field(gt=0)]
-Port = Annotated[int, Field(ge=1, le=65535)]
 
 
 class ConfigModel(BaseModel):
@@ -170,35 +169,13 @@ class WebhookPushConfig(ConfigModel):
 
 
 class GmailPushConfig(ConfigModel):
-    """Gmail SMTP 推送配置；收件人可显式配置或从环境变量读取。"""
+    """Gmail SMTP 推送配置；SMTP 端点固定，收件人从环境变量读取。"""
 
     enabled: bool
     usernameKeyName: EnvVarName
     passwordKeyName: EnvVarName
-    to: Tuple[NonEmptyStr, ...]
     toKeyName: EnvVarName
-    cc: Tuple[NonEmptyStr, ...]
-    bcc: Tuple[NonEmptyStr, ...]
     fromName: NonEmptyStr
-    subject: NonEmptyStr
-    smtpHost: NonEmptyStr
-    smtpPort: Port
-    useTLS: bool
-    useSSL: bool
-    timeout: PositiveInt
-
-    @field_validator("to", "cc", "bcc", mode="before")
-    @classmethod
-    def normalize_addresses(cls, value):
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
-
-    @model_validator(mode="after")
-    def check_transport(self) -> "GmailPushConfig":
-        if self.useTLS and self.useSSL:
-            raise ValueError("gmail.useTLS 与 gmail.useSSL 不能同时为 true")
-        return self
 
 
 class PushConfig(ConfigModel):

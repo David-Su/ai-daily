@@ -15,6 +15,12 @@ from src.config import GmailPushConfig
 
 from .base import PushPlatform
 
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
+SMTP_TIMEOUT = 30
+DEFAULT_SUBJECT = "AI Daily"
+
+
 class GmailPlatform(PushPlatform):
     """Gmail SMTP 邮件推送"""
 
@@ -44,43 +50,24 @@ class GmailPlatform(PushPlatform):
         await asyncio.to_thread(self._send_sync, content, title)
 
     def _send_sync(self, content: str, title: str = None):
-        """发送到由配置指定的 Gmail SMTP 服务。"""
-        recipients = self._get_all_recipients()
+        """通过 Gmail SMTP（STARTTLS）发送邮件。"""
         message = self._build_message(content, title)
 
         try:
-            if self.config.useSSL:
-                with smtplib.SMTP_SSL(
-                    self.config.smtpHost,
-                    self.config.smtpPort,
-                    timeout=self.config.timeout,
-                    context=ssl.create_default_context(),
-                ) as smtp:
-                    smtp.login(self.username, self.password)
-                    smtp.send_message(message, to_addrs=recipients)
-            else:
-                with smtplib.SMTP(
-                    self.config.smtpHost,
-                    self.config.smtpPort,
-                    timeout=self.config.timeout,
-                ) as smtp:
-                    if self.config.useTLS:
-                        smtp.starttls(context=ssl.create_default_context())
-                    smtp.login(self.username, self.password)
-                    smtp.send_message(message, to_addrs=recipients)
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as smtp:
+                smtp.starttls(context=ssl.create_default_context())
+                smtp.login(self.username, self.password)
+                smtp.send_message(message)
         except Exception as e:
             raise RuntimeError(f"Gmail推送失败: {e}") from e
 
     def _build_message(self, content: str, title: str = None) -> EmailMessage:
         """构建邮件消息"""
-        subject = title or self.config.subject
+        subject = title or DEFAULT_SUBJECT
         message = EmailMessage()
         message["Subject"] = subject
         message["From"] = formataddr((self.from_name, self.username))
         message["To"] = ", ".join(self._get_recipients())
-        cc = self._get_addresses("cc")
-        if cc:
-            message["Cc"] = ", ".join(cc)
         message.set_content(content, subtype="plain", charset="utf-8")
         message.add_alternative(
             self._markdown_to_html(content, subject), subtype="html", charset="utf-8"
@@ -150,21 +137,6 @@ class GmailPlatform(PushPlatform):
 </html>"""
 
     def _get_recipients(self) -> List[str]:
-        """优先使用配置中的收件人，否则读取环境变量。"""
-        if self.config.to:
-            return list(self.config.to)
+        """从环境变量读取收件人，支持逗号分隔多个地址。"""
         raw = os.environ.get(self.config.toKeyName, "")
-        return self._normalize_addresses(raw)
-
-    def _get_all_recipients(self) -> List[str]:
-        """获取实际投递收件人，包括 cc 和 bcc。"""
-        return self._get_recipients() + self._get_addresses("cc") + self._get_addresses(
-            "bcc"
-        )
-
-    def _get_addresses(self, key: str) -> List[str]:
-        return list(getattr(self.config, key))
-
-    @staticmethod
-    def _normalize_addresses(value: str) -> List[str]:
-        return [item.strip() for item in value.split(",") if item.strip()]
+        return [item.strip() for item in raw.split(",") if item.strip()]

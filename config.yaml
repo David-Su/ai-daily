@@ -65,17 +65,8 @@ push:
     enabled: true
     usernameKeyName: GMAIL_USERNAME
     passwordKeyName: GMAIL_APP_PASSWORD
-    to: []
     toKeyName: GMAIL_TO
-    cc: []
-    bcc: []
-    fromName: AI Daily
-    subject: AI Daily
-    smtpHost: smtp.gmail.com
-    smtpPort: 587
-    useTLS: true
-    useSSL: false
-    timeout: 30
+    fromName: AI Daily                # 发件人显示名
 
 # RSS 源：base_opml + add - block - block_domains
 sources:
