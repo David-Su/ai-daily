@@ -443,6 +443,7 @@ pytest tests/test_flow.py -v
 | Digest | 使用 fake LLM 验证 domain digest prompt 可调用 |
 | 存储和筛选 | 写入临时 fetch 文件，再按分数、domain、时间筛出待推送和上下文 |
 | 推送 | 基于 `config.yaml` 的 Gmail 配置构建邮件消息，不发送真实邮件 |
+| Push Job | 用指定 fetch 文件驱动完整 `run_push_job()`，验证 digest 生成和 push 文件落盘 |
 
 真实服务测试默认关闭。需要调试时直接改 `tests/test_flow.py` 顶部变量：
 
@@ -453,3 +454,17 @@ RUN_REAL_LLM_DIGEST = True
 RUN_REAL_PUSH = True
 DEBUG_DOMAIN = "AI"
 ```
+
+### 用指定 fetch 文件跑 run_push_job
+
+`run_push_job_with_fetch_file(fetch_file, monkeypatch, data_dir, restamp=True, send_push=False)` 是 `tests/test_flow.py` 中的调试辅助方法：
+
+1. 读取传入的 fetch JSON（相对路径按仓库根目录解析）
+2. 默认把每条 `fetched_at` 重写为当前时间，绕过 `push_cutoff` 让历史条目全部进入待推送集合
+3. 写入 `data_dir` 下的当天 fetch 文件，并把 `collect_entries_for_domain_pushes`、`load_recent_push_titles`、`get_push_file` 重定向到该目录
+4. 执行 `run_push_job()`，返回本次生成的 push 文件路径列表
+
+`send_push=False`（默认）时 `send_to_platforms` 被替换为打印，不发送真实消息。两个入口：
+
+- `test_run_push_job_from_fetch_file`：fake `compose_digest`，常规回归用例，随测试套件执行
+- `test_debug_real_push_job_from_fetch_file`：走真实 LLM digest，由 `RUN_REAL_PUSH_JOB` 和 `DEBUG_FETCH_FILE` 控制，默认跳过

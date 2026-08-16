@@ -290,6 +290,19 @@ RUN_REAL_PUSH = True
 DEBUG_DOMAIN = "AI"
 ```
 
+### 用指定 fetch 文件跑汇总推送
+
+`run_push_job_with_fetch_file(fetch_file, monkeypatch, data_dir)` 把任意 fetch JSON 复制到临时目录，重写 `fetched_at` 让全部条目进入待推送集合，再执行一次完整 `run_push_job()`，返回生成的 push 文件路径。fetch 读取、push 写入都隔离在 `data_dir`，不会污染 `news-data/`。
+
+调试真实 digest 时改 `tests/test_flow.py` 顶部：
+
+```python
+DEBUG_FETCH_FILE = "news-data/fetch-2026-08-16.json"
+RUN_REAL_PUSH_JOB = True
+```
+
+只有 `RUN_REAL_PUSH = True` 时才会真正发送到推送平台，否则推送内容仅打印到控制台。
+
 ## 扩展指南
 
 ### 添加 RSS 源

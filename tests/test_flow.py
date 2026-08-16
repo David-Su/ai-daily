@@ -35,6 +35,7 @@ from src.main import (
     collect_entries_for_domain_pushes,
     get_domain_order,
     run_fetch_job,
+    run_push_job,
     sort_domains,
 )
 from src.processor import html_to_markdown
@@ -46,6 +47,8 @@ from src.storage import (
     append_entries,
     get_fetch_file,
     get_notify_file,
+    get_push_file,
+    load_recent_push_titles,
     is_duplicate_entry,
     find_rapidfuzz_duplicate_entry,
     load_existing_dedupe_keys,
@@ -65,6 +68,9 @@ RUN_REAL_RSS_FETCH = False
 RUN_REAL_LLM_SCORE = False
 RUN_REAL_LLM_DIGEST = False
 RUN_REAL_PUSH = False
+# 指定一个 fetch 文件路径（相对仓库根目录或绝对路径），配合 RUN_REAL_PUSH_JOB 走真实 digest 流程。
+DEBUG_FETCH_FILE = "news-data/fetch-2026-08-16.json"
+RUN_REAL_PUSH_JOB = True
 
 
 def _config():
@@ -155,6 +161,116 @@ def _sample_entries(domain):
             "summary": "",
         },
     ]
+
+
+async def run_push_job_with_fetch_file(
+    fetch_file: str,
+    monkeypatch,
+    data_dir: str,
+    restamp: bool = True,
+    send_push: bool = False,
+) -> list[str]:
+    """用指定 fetch 文件跑一遍 run_push_job，输入输出都隔离在 data_dir 下。
+
+    Args:
+        fetch_file: fetch JSON 路径，相对路径按仓库根目录解析。
+        monkeypatch: pytest fixture，用于把主流程的读写重定向到 data_dir。
+        data_dir: 临时数据目录，承载 fetch 副本和生成的 push 文件。
+        restamp: 把 fetched_at 改写为当前时间，让历史条目也进入待推送集合。
+        send_push: 是否真的发送到推送平台；默认只打印内容。
+
+    Returns:
+        本次生成的 push 文件路径列表。
+    """
+    import src.main as main_module
+
+    source = Path(fetch_file)
+    if not source.is_absolute():
+        source = ROOT / source
+    entries = read_entries(str(source))
+    print(f"📄 读取 {source} | {len(entries)} 条")
+
+    now = datetime.now(get_timezone())
+    if restamp:
+        for entry in entries:
+            entry["fetched_at"] = now.isoformat()
+
+    save_fetch_file(
+        get_fetch_file(now.date(), data_dir),
+        {"date": now.date().isoformat()},
+        entries,
+    )
+
+    push_files: list[str] = []
+
+    def fake_get_push_file(**kwargs):
+        push_file = get_push_file(data_dir=data_dir, **kwargs)
+        push_files.append(push_file)
+        return push_file
+
+    async def fake_send_to_platforms(content, title=None):
+        print(f"\n--- send_to_platforms | title={title} ---\n{content}\n")
+
+    monkeypatch.setattr(
+        main_module,
+        "collect_entries_for_domain_pushes",
+        lambda **_kwargs: collect_entries_for_domain_pushes(data_dir=data_dir),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "load_recent_push_titles",
+        lambda **kwargs: load_recent_push_titles(data_dir=data_dir, **kwargs),
+    )
+    monkeypatch.setattr(main_module, "get_push_file", fake_get_push_file)
+    if not send_push:
+        monkeypatch.setattr(main_module, "send_to_platforms", fake_send_to_platforms)
+
+    await main_module.run_push_job()
+    return push_files
+
+
+@pytest.mark.asyncio
+async def test_run_push_job_from_fetch_file(tmp_path, monkeypatch):
+    """用 fake LLM 验证 fetch 文件能驱动完整 run_push_job 并落盘 push 文件。"""
+    import src.main as main_module
+
+    domain = _domain(_config())
+    entries = _sample_entries(domain)
+    entries[0]["score"] = 88
+    entries[1]["score"] = 75
+
+    fetch_file = tmp_path / "fetch-input.json"
+    save_fetch_file(str(fetch_file), {"date": "2026-08-16"}, entries)
+
+    async def fake_compose_digest(to_push, context, recent_push_context="", domain=None):
+        return f"# Digest {domain}\n\n- {len(to_push)} 条待推送"
+
+    monkeypatch.setattr(main_module, "compose_digest", fake_compose_digest)
+
+    push_files = await run_push_job_with_fetch_file(
+        str(fetch_file), monkeypatch, data_dir=str(tmp_path / "data")
+    )
+
+    assert len(push_files) == 1
+    content = Path(push_files[0]).read_text(encoding="utf-8")
+    assert f'domain: "{domain}"' in content
+    assert f"# Digest {domain}" in content
+
+
+@pytest.mark.skipif(not RUN_REAL_PUSH_JOB, reason="real push job debug is off")
+@pytest.mark.asyncio
+async def test_debug_real_push_job_from_fetch_file(tmp_path, monkeypatch):
+    """真实 digest 调试：读取 DEBUG_FETCH_FILE 跑 run_push_job，默认不发送到平台。"""
+    push_files = await run_push_job_with_fetch_file(
+        DEBUG_FETCH_FILE,
+        monkeypatch,
+        data_dir=str(tmp_path / "data"),
+        send_push=RUN_REAL_PUSH,
+    )
+
+    for push_file in push_files:
+        print(f"\n===== {push_file} =====")
+        print(Path(push_file).read_text(encoding="utf-8"))
 
 
 def test_config_interface_and_prompt_files():
