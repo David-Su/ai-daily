@@ -32,6 +32,7 @@ news-data/
 # Claude/其他代理数据
 .omc/
 .claude/
+.agents/
 .headroom/
 
 resources/rss.opml

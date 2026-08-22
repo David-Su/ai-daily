@@ -68,8 +68,9 @@ async def test_digest_removes_oldest_then_lowest_score_until_within_token_limit(
     def fake_count_tokens(prompt):
         return sum(title in prompt for title in ("old-low", "old-high", "new-low"))
 
-    async def fake_call_llm(prompt):
+    async def fake_call_llm(prompt, tier):
         captured["prompt"] = prompt
+        captured["tier"] = tier
         return "# Digest"
 
     monkeypatch.setattr(llm_module, "_count_digest_tokens", fake_count_tokens)

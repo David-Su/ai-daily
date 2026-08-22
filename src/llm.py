@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from src.config import LLMConfig, get_config
+from src.config import LLMConfig, ModelTier, get_config
 
 
 # 仅重试临时性 HTTP 故障；认证、请求参数和上下文超限等 4xx 错误需要人工修复。
@@ -78,11 +78,19 @@ def load_prompt(prompt_path: str, **kwargs) -> str:
 
 
 async def call_llm(
-    prompt: str, response_format: Optional[Dict] = None
+    prompt: str,
+    tier: ModelTier,
+    response_format: Optional[Dict] = None,
 ) -> str:
-    """调用LLM API - 统一使用OpenAI兼容接口"""
+    """调用LLM API - 统一使用OpenAI兼容接口
+
+    Args:
+        prompt: 完整提示词
+        tier: 模型档位；调用方必须显式声明，失败不会跨档回落
+        response_format: 可选的结构化输出配置
+    """
     config = get_config().llm
-    model = config.model
+    model = config.model_for(tier)
     base_url = config.baseUrl
     max_retries = config.max_retries
 
@@ -130,23 +138,33 @@ async def call_llm(
     raise last_error
 
 
-async def check_llm_available() -> str:
-    """启动时检查 LLM 接口可用性"""
-    timeout_seconds = get_config().llm.startup_timeout_seconds
-    prompt = "Reply with OK only."
-
+async def _check_tier_available(tier: ModelTier, timeout_seconds: int) -> None:
+    """探测单个档位；失败或超时都抛出带档位名的错误。"""
     try:
-        response = await asyncio.wait_for(call_llm(prompt), timeout=timeout_seconds)
+        response = await asyncio.wait_for(
+            call_llm("Reply with OK only.", tier), timeout=timeout_seconds
+        )
     except asyncio.TimeoutError as exc:
-        raise RuntimeError(f"LLM可用性检查超时({timeout_seconds}s)") from exc
+        raise RuntimeError(f"{tier.value} 档超时({timeout_seconds}s)") from exc
     except Exception as exc:
-        raise RuntimeError(f"LLM可用性检查失败: {exc}") from exc
+        raise RuntimeError(f"{tier.value} 档调用失败: {exc}") from exc
 
-    response_text = response.strip()
-    if not response_text:
-        raise RuntimeError("LLM可用性检查返回空响应")
+    if not response.strip():
+        raise RuntimeError(f"{tier.value} 档返回空响应")
 
-    return response_text
+
+async def check_llm_available() -> None:
+    """启动时检查所有档位可用性；任一档不可用即抛错中断启动。"""
+    timeout_seconds = get_config().llm.startup_timeout_seconds
+
+    results = await asyncio.gather(
+        *(_check_tier_available(tier, timeout_seconds) for tier in ModelTier),
+        return_exceptions=True,
+    )
+
+    failures = [str(r) for r in results if isinstance(r, BaseException)]
+    if failures:
+        raise RuntimeError("LLM可用性检查失败: " + "; ".join(failures))
 
 
 def _build_batch_prompt(config: LLMConfig, entries: List[Dict]) -> str:
@@ -328,7 +346,9 @@ async def _score_single_batch(
     prompt = _build_batch_prompt(config, entries)
 
     try:
-        response = await call_llm(prompt, response_format={"type": "json_object"})
+        response = await call_llm(
+            prompt, ModelTier.LOW, response_format={"type": "json_object"}
+        )
         results = _parse_score_response(response)
 
         if not isinstance(results, list):
@@ -472,7 +492,7 @@ async def generate_immediate_push(
             recent_push_context=recent_push_context,
         )
 
-        return await call_llm(prompt), None
+        return await call_llm(prompt, ModelTier.LOW), None
     except Exception as e:
         error_message = f"生成即时推送失败: {e}"
         print(f"⚠️ {error_message}")
@@ -548,6 +568,6 @@ async def compose_digest(
         )
 
     try:
-        return await call_llm(prompt)
+        return await call_llm(prompt, ModelTier.MEDIUM)
     except Exception:
         raise

@@ -4,6 +4,7 @@ import logging
 import sys
 import xml.etree.ElementTree as ET
 from datetime import time, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Dict, List, Literal, NoReturn, Optional, Tuple
 from urllib.parse import urlparse
@@ -141,11 +142,19 @@ class PromptsConfig(ConfigModel):
     score_batch: NonEmptyStr
 
 
+class ModelTier(str, Enum):
+    """模型档位；成本与能力由低到高，值与配置键一致。"""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class LLMConfig(ConfigModel):
     """LLM 接口与批处理参数"""
 
     provider: Literal["openai"]
-    model: NonEmptyStr
+    models: Dict[ModelTier, NonEmptyStr]
     baseUrl: NonEmptyStr
     apiKeyName: EnvVarName
     max_prompt_chars: PositiveInt
@@ -159,6 +168,20 @@ class LLMConfig(ConfigModel):
     @classmethod
     def check_base_url(cls, value: str) -> str:
         return _validate_http_url(value).rstrip("/")
+
+    @field_validator("models")
+    @classmethod
+    def check_all_tiers(
+        cls, value: Dict[ModelTier, str]
+    ) -> Dict[ModelTier, str]:
+        missing = [tier.value for tier in ModelTier if tier not in value]
+        if missing:
+            raise ValueError(f"缺少模型档位: {', '.join(missing)}")
+        return value
+
+    def model_for(self, tier: ModelTier) -> str:
+        """返回档位对应的模型名；档位齐全由校验保证。"""
+        return self.models[tier]
 
 
 class WebhookPushConfig(ConfigModel):

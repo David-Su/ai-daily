@@ -100,7 +100,7 @@ await asyncio.gather(fetch_loop(), push_loop())
 职责：
 
 - 用 Pydantic 模型描述整份配置：`AppConfig` 是根模型，下辖 `FilterConfig`、`DedupeConfig`、`ScheduleConfig`、`FetchConfig`、`LLMConfig`、`PushConfig`、`SourcesConfig`。
-- `load_config()` 用 `yaml.safe_load()` 读取 `config.yaml`，再交给 `AppConfig.model_validate()` 校验，返回类型化对象，业务代码统一用属性访问（`config.llm.model`）。
+- `load_config()` 用 `yaml.safe_load()` 读取 `config.yaml`，再交给 `AppConfig.model_validate()` 校验，返回类型化对象，业务代码统一用属性访问（`config.llm.models`、`config.llm.model_for(tier)`）。
 - `initialize_config()` 在启动时只加载一次并保存全局只读 `AppConfig`；`get_config()` 在业务模块中读取它，避免配置对象沿调用链传递。
 - `get_timezone()` 只从已初始化的全局配置读取时区。
 - `parse_opml()` 解析 OPML 订阅源。
@@ -149,18 +149,38 @@ LLM 调用统一使用 OpenAI 兼容接口：
 ```python
 url = f"{base_url}/chat/completions"
 payload = {
-    "model": model,
+    "model": config.model_for(tier),
     "messages": [{"role": "user", "content": prompt}],
     "temperature": 0.3,
 }
 ```
 
-`call_llm()` 支持：
+`call_llm(prompt, tier, response_format=None)` 支持：
 
 - 从 `apiKeyName` 指定的环境变量读取密钥。
+- 必填 `tier` 参数（`ModelTier` 枚举）决定使用哪一档模型，无默认值；调用点必须显式声明档位。
 - 通过可选 `response_format` 透传 OpenAI 兼容 JSON mode 等结构化输出配置。
 - `max_retries` 控制重试次数。
 - 对 `404, 429, 500, 502, 503, 504` 做指数退避重试。
+
+**模型档位**
+
+`llm.models` 声明 `low` / `medium` / `high` 三档模型名，三档必须齐全。各档共用同一组接口参数（`baseUrl`、`apiKeyName`、`max_retries`），上下文额度（`max_prompt_chars`、`digest_max_input_tokens`）保持全局，不随档位变化——因此分批与裁剪逻辑无需感知档位。
+
+档位分配依据实测加权成本（定时汇总约 63%、评分约 22%、即时快讯约 15%）：
+
+| 调用点 | 档位 | 理由 |
+| --- | --- | --- |
+| `score_batch()` | `low` | 输出为紧凑 JSON 且仅供内部消费，降档近乎无损 |
+| `generate_immediate_push()` | `low` | 成本占比最小、输出为短文；已用真实热点数据验证格式与无新内容标记 |
+| `compose_digest()` | `medium` | 唯一的长文成品输出 |
+| 无 | `high` | 预留升档位，汇总质量不足时切换 |
+
+档位是意图，模型名是实现：换模型只改配置，换档位才改代码。
+
+**不做自动降档**：调用失败时仅在原档位内按 `max_retries` 重试，不会改用其他档位完成该次调用。汇总与快讯直接推送给用户且不可撤回，静默降档会让推送质量在用户无感知的情况下波动。
+
+`check_llm_available()` 在启动时并发探测全部三档，沿用 `startup_timeout_seconds` 作为单档超时。三档均成功时静默返回（无返回值）；任一档失败或超时即抛错中断启动，错误信息包含失败档位名与原因，多档失败时列出全部失败档位。
 
 `score_batch(entries, config)`：
 
@@ -266,7 +286,7 @@ platforms = {
 - 所有字段都是必填，代码中不设默认值，配置里缺什么就报什么。
 - 禁止未知字段（`extra="forbid"`），拼错的键名会直接报错而不是被忽略。
 - 值域约束：分数类字段限定 `0-100`，时长与并发类字段必须大于 0，`timezone_hours` 限定 `-12` 到 `14`。
-- 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`prompts.domains` 必须至少声明一个领域，且每个领域必须配好三类 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
+- 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`llm.models` 必须齐备 `low`、`medium`、`high` 三档且模型名非空；`prompts.domains` 必须至少声明一个领域，且每个领域必须配好三类 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
 - 初始化时还会解析相对路径并检查 prompt 与 `base_opml` 文件可读，避免进入循环后才失败。
 
 配置文件缺失、YAML 语法错误、顶层不是映射，或任一字段校验失败时，`load_config()` 会用 `logging` 打印失败原因和逐条问题位置，然后 `sys.exit(1)` 退出，不进入主流程。
@@ -300,7 +320,10 @@ fetch:
   timeout: 10
 llm:
   provider: openai
-  model: gpt-5.6-luna
+  models:                             # 档位 -> 模型名；三档必须齐全
+    low: gpt-5.4                      # 评分、即时快讯
+    medium: gpt-5.6-luna              # 定时汇总
+    high: gpt-5.6-sol                 # 预留升档位，当前无调用点
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
   max_prompt_chars: 64000

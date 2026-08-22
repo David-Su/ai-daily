@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import sys
@@ -17,6 +18,7 @@ from src import config as config_module
 from src.config import (
     AppConfig,
     LLMConfig,
+    ModelTier,
     SourcesConfig,
     get_timezone,
     get_config,
@@ -27,6 +29,7 @@ from src.config import (
 from src.fetcher import fetch_all_feeds
 from src.llm import (
     RETRYABLE_STATUS_CODES,
+    check_llm_available,
     compose_digest,
     generate_immediate_push,
     score_batch,
@@ -469,10 +472,152 @@ async def test_call_llm_retries_cloudflare_524(monkeypatch):
         max_retries=2,
     )
     _install_config(_config().model_copy(update={"llm": custom_llm}))
-    result = await llm_module.call_llm("test prompt")
+    result = await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
 
     assert result == "retry succeeded"
     assert len(requests) == 2
+    # 重试不跨档：两次请求都用 medium 档模型
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert sent_models == [custom_llm.models[ModelTier.MEDIUM]] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "task, expected_tier",
+    [
+        ("score", ModelTier.LOW),
+        ("immediate", ModelTier.LOW),
+        ("digest", ModelTier.MEDIUM),
+    ],
+)
+async def test_call_sites_use_expected_model_tier(monkeypatch, task, expected_tier):
+    """三个调用点各自按约定档位取模型：评分与快讯用 low，汇总用 medium。"""
+    import src.llm as llm_module
+
+    config = _config()
+    domain = _domain(config)
+    entries = _sample_entries(domain)
+    entries[0]["score"] = 95
+    entries[0]["summary"] = "Release summary"
+    captured = {}
+
+    async def fake_call_llm(prompt, tier, response_format=None):
+        captured["tier"] = tier
+        if response_format:
+            return json.dumps({"items": []})
+        return "# Content"
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
+    monkeypatch.setattr(llm_module, "_count_digest_tokens", lambda prompt: 0)
+
+    if task == "score":
+        await score_batch(entries)
+    elif task == "immediate":
+        await generate_immediate_push([entries[0]], domain=domain)
+    else:
+        await compose_digest([entries[0]], [], domain=domain)
+
+    assert captured["tier"] is expected_tier
+    # 档位映射到配置中该档的模型名
+    assert config.llm.model_for(captured["tier"]) == config.llm.models[expected_tier]
+
+
+@pytest.mark.asyncio
+async def test_check_llm_available_probes_every_tier_silently(monkeypatch):
+    """三档全部可用时静默通过，且每档都被探测过一次。"""
+    import src.llm as llm_module
+
+    probed = []
+
+    async def fake_call_llm(prompt, tier):
+        probed.append(tier)
+        return "OK"
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
+
+    assert await check_llm_available() is None
+    assert set(probed) == set(ModelTier)
+
+
+@pytest.mark.asyncio
+async def test_check_llm_available_aborts_on_single_tier_failure(monkeypatch):
+    """单档不可用即中断启动，错误信息含该档位名。"""
+    import src.llm as llm_module
+
+    async def fake_call_llm(prompt, tier):
+        if tier is ModelTier.HIGH:
+            raise RuntimeError("模型不存在")
+        return "OK"
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await check_llm_available()
+
+    message = str(excinfo.value)
+    assert "high" in message
+    assert "模型不存在" in message
+    assert "low" not in message
+
+
+@pytest.mark.asyncio
+async def test_check_llm_available_reports_timeout_and_all_failed_tiers(monkeypatch):
+    """超时按档位报告；多档失败时错误信息覆盖全部失败档位。"""
+    import src.llm as llm_module
+
+    async def fake_call_llm(prompt, tier):
+        if tier is ModelTier.LOW:
+            raise asyncio.TimeoutError()
+        if tier is ModelTier.MEDIUM:
+            raise RuntimeError("凭据无效")
+        return "OK"
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await check_llm_available()
+
+    message = str(excinfo.value)
+    assert "low" in message and "medium" in message
+    assert "超时" in message
+    assert "凭据无效" in message
+
+
+@pytest.mark.asyncio
+async def test_check_llm_available_rejects_empty_response(monkeypatch):
+    """某档返回空响应视为不可用。"""
+    import src.llm as llm_module
+
+    async def fake_call_llm(prompt, tier):
+        return "   " if tier is ModelTier.MEDIUM else "OK"
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
+
+    with pytest.raises(RuntimeError, match="medium"):
+        await check_llm_available()
+
+
+@pytest.mark.parametrize(
+    "mutate, expected_error",
+    [
+        (lambda llm: llm.update(model="gpt-5.6-luna"), "Extra inputs are not permitted"),
+        (lambda llm: llm["models"].pop("high"), "缺少模型档位: high"),
+        (lambda llm: llm["models"].update(low="  "), "at least 1 character"),
+        (lambda llm: llm["models"].update(ultra="x"), "'low', 'medium' or 'high'"),
+    ],
+    ids=["legacy_model_field", "missing_tier", "blank_model_name", "unknown_tier"],
+)
+def test_llm_config_rejects_invalid_tier_configurations(mutate, expected_error):
+    """旧的单一模型字段、缺档、空模型名和未知档位都必须校验失败。"""
+    from pydantic import ValidationError
+
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    mutate(raw["llm"])
+
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.model_validate(raw)
+
+    assert expected_error in str(excinfo.value)
 
 
 def test_sources_merge_and_html_processing():
@@ -671,7 +816,7 @@ async def test_score_step_with_fake_llm(monkeypatch):
     domain = _domain(config)
     entries = _sample_entries(domain)
 
-    async def fake_call_llm(prompt, response_format=None):
+    async def fake_call_llm(prompt, tier, response_format=None):
         assert entries[0]["title"] in prompt
         assert response_format == {"type": "json_object"}
         return json.dumps(
@@ -736,7 +881,7 @@ async def test_digest_step_with_fake_llm(monkeypatch):
     entries[0]["score"] = 88
     entries[0]["summary"] = "Release summary"
 
-    async def fake_call_llm(prompt):
+    async def fake_call_llm(prompt, tier):
         assert entries[0]["title"] in prompt
         assert "recent item" in prompt
         return "# Digest\n\n- Ready"
@@ -765,7 +910,7 @@ async def test_immediate_push_uses_domain_prompt(monkeypatch):
     entries = _sample_entries(domain)
     entries[0]["score"] = 95
 
-    async def fake_call_llm(prompt):
+    async def fake_call_llm(prompt, tier):
         assert entries[0]["title"] in prompt
         assert "recent item" in prompt
         if domain == "Investment":
