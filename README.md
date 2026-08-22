@@ -1,6 +1,6 @@
 <h1 align="center">AI Daily 每日资讯推送系统</h1>
 
-![AI Daily Banner](https://cdn.yeekal.com/yee/blog/2026-03/ai-daily-cover-wide-ultra.webp)
+![AI Daily Banner](/resources/readme_banner.jpg)
 
 <p align="center">AI 驱动的 RSS 新闻聚合与分领域推送系统 | 支持 400+ 信息源 | LLM 批量评分 | 推送到 Discord/飞书/Gmail</p>
 
@@ -58,7 +58,7 @@ GMAIL_TO=receiver@example.com
 # FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
 ```
 
-如果你使用 OpenRouter、OpenAI 或其他兼容服务，只需要同步修改 `config.yaml` 中的 `llm.baseUrl`、`llm.model` 和 `llm.apiKeyName`。
+如果你使用 OpenRouter、OpenAI 或其他兼容服务，只需要同步修改 `config.yaml` 中的 `llm.baseUrl`、`llm.models` 和 `llm.apiKeyName`。三档模型需来自同一服务，因为各档共用同一个 `baseUrl` 和 API Key。
 
 ### 4. 检查配置
 
@@ -67,7 +67,10 @@ GMAIL_TO=receiver@example.com
 ```yaml
 llm:
   provider: openai
-  model: gpt-5.6-luna
+  models:                  # 档位 -> 模型名，三档必须齐全
+    low: gpt-5.4           # 评分、即时快讯
+    medium: gpt-5.6-luna   # 定时汇总
+    high: gpt-5.6-sol      # 预留升档位，当前无调用点
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
   max_prompt_chars: 64000
