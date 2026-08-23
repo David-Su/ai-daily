@@ -3,7 +3,7 @@
 
 # 评分筛选
 filter:
-  min_score: 60                        # 汇总推送的最低分
+  min_score: 70                        # 汇总推送的最低分
   hot_threshold: 90                    # 达到该分数触发即时推送
   context_days: 2                      # 收集待推送条目回溯天数
   keep_days: 7                         # 本地归档保留天数
