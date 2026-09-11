@@ -34,6 +34,7 @@ news-data/
 .claude/
 .agents/
 .headroom/
+.opencode/
 
 resources/rss.opml
 resources/rss.opml.bak
