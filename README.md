@@ -58,7 +58,7 @@ GMAIL_TO=receiver@example.com
 # FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/...
 ```
 
-如果你使用 OpenRouter、OpenAI 或其他兼容服务，只需要同步修改 `config.yaml` 中的 `llm.baseUrl`、`llm.models` 和 `llm.apiKeyName`。三档模型需来自同一服务，因为各档共用同一个 `baseUrl` 和 API Key。
+如果你使用 OpenRouter、OpenAI 或其他兼容服务，只需要同步修改 `config.yaml` 中的 `llm.baseUrl`、`llm.models`、`llm.fallback`（可选）和 `llm.apiKeyName`。三档模型与兜底模型需来自同一服务，因为它们共用同一个 `baseUrl` 和 API Key。
 
 ### 4. 检查配置
 
@@ -71,6 +71,7 @@ llm:
     low: gpt-5.4           # 评分、即时快讯
     medium: gpt-5.6-luna   # 定时汇总
     high: gpt-5.6-sol      # 预留升档位，当前无调用点
+  fallback: gpt-5.4        # 可选；三档共用的同接口备用模型，须与当前档主模型不同
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
   max_prompt_chars: 64000
@@ -186,7 +187,8 @@ cron 格式：`minute hour day month weekday`。
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `provider` | string | 供应商标识；当前调用统一走 OpenAI 兼容接口 |
-| `model` | string | 模型名称 |
+| `models` | mapping | 档位 `low` / `medium` / `high` 到主模型名；三档必须齐全 |
+| `fallback` | string | 可选的同接口备用模型名，三档共用；与当前档主模型同名视为未配置 |
 | `baseUrl` | string | OpenAI 兼容接口地址，不包含 `/chat/completions` |
 | `apiKeyName` | string | API Key 所在环境变量名 |
 | `max_prompt_chars` | number | 单个批次 prompt 最大字符数 |

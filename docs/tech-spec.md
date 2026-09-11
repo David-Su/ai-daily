@@ -100,7 +100,7 @@ await asyncio.gather(fetch_loop(), push_loop())
 职责：
 
 - 用 Pydantic 模型描述整份配置：`AppConfig` 是根模型，下辖 `FilterConfig`、`DedupeConfig`、`ScheduleConfig`、`FetchConfig`、`LLMConfig`、`PushConfig`、`SourcesConfig`。
-- `load_config()` 用 `yaml.safe_load()` 读取 `config.yaml`，再交给 `AppConfig.model_validate()` 校验，返回类型化对象，业务代码统一用属性访问（`config.llm.models`、`config.llm.model_for(tier)`）。
+- `load_config()` 用 `yaml.safe_load()` 读取 `config.yaml`，再交给 `AppConfig.model_validate()` 校验，返回类型化对象，业务代码统一用属性访问（`config.llm.models`、`config.llm.fallback`、`config.llm.model_for(tier)`）。
 - `initialize_config()` 在启动时只加载一次并保存全局只读 `AppConfig`；`get_config()` 在业务模块中读取它，避免配置对象沿调用链传递。
 - `get_timezone()` 只从已初始化的全局配置读取时区。
 - `parse_opml()` 解析 OPML 订阅源。
@@ -155,17 +155,20 @@ payload = {
 }
 ```
 
-`call_llm(prompt, tier, response_format=None)` 支持：
+`call_llm(prompt, tier, response_format=None, allow_fallback=True)` 支持：
 
 - 从 `apiKeyName` 指定的环境变量读取密钥。
 - 必填 `tier` 参数（`ModelTier` 枚举）决定使用哪一档模型，无默认值；调用点必须显式声明档位。
 - 通过可选 `response_format` 透传 OpenAI 兼容 JSON mode 等结构化输出配置。
-- `max_retries` 控制重试次数。
-- 对 `404, 429, 500, 502, 503, 504` 做指数退避重试。
+- `max_retries` 控制主模型重试次数。
+- 对可重试状态码做指数退避重试；`404` 等不可重试错误立刻结束主模型这一轮。
+- `allow_fallback` 默认开启。主模型按既有策略失败后，若配置了与当前档主模型不同的 `llm.fallback`，再用同一 `baseUrl` / API Key 请求恰好一次；成功则打日志，失败则抛与原先相同的错误。启动探测传入 `allow_fallback=False`。
 
 **模型档位**
 
 `llm.models` 声明 `low` / `medium` / `high` 三档模型名，三档必须齐全。各档共用同一组接口参数（`baseUrl`、`apiKeyName`、`max_retries`），上下文额度（`max_prompt_chars`、`digest_max_input_tokens`）保持全局，不随档位变化——因此分批与裁剪逻辑无需感知档位。
+
+`llm.fallback` 是可选的同接口备用模型名，写在 `models` 外面，三档共用，不另配地址或凭据。未写该项时行为与现在一致；写了但与当前档主模型同名，则该次调用视为没有可用兜底。
 
 档位分配依据实测加权成本（定时汇总约 63%、评分约 22%、即时快讯约 15%）：
 
@@ -178,9 +181,11 @@ payload = {
 
 档位是意图，模型名是实现：换模型只改配置，换档位才改代码。
 
-**不做自动降档**：调用失败时仅在原档位内按 `max_retries` 重试，不会改用其他档位完成该次调用。汇总与快讯直接推送给用户且不可撤回，静默降档会让推送质量在用户无感知的情况下波动。
+**不做自动降档**：调用失败时不会改用其他档位的主模型完成该次调用。汇总与快讯直接推送给用户且不可撤回，静默降档会让推送质量在用户无感知的情况下波动。
 
-`check_llm_available()` 在启动时并发探测全部三档，沿用 `startup_timeout_seconds` 作为单档超时。三档均成功时静默返回（无返回值）；任一档失败或超时即抛错中断启动，错误信息包含失败档位名与原因，多档失败时列出全部失败档位。
+**同接口备用名**：这与降档是两件事。主模型按既有重试策略失败后，可以换成 `llm.fallback` 再打一枪，请求仍走同一 `baseUrl` 和 API Key，档位不变。进程不粘滞，下一次调用仍先打该档主模型。切换成功只打日志，不发异常通知。
+
+`check_llm_available()` 在启动时并发探测全部三档主模型，沿用 `startup_timeout_seconds` 作为单档超时，探测关闭兜底。三档均成功时静默返回（无返回值）；任一档失败或超时即抛错中断启动，错误信息包含失败档位名与原因，多档失败时列出全部失败档位。已配置 `fallback` 也不能把失败的档标为可用。
 
 `score_batch(entries, config)`：
 
@@ -283,10 +288,10 @@ platforms = {
 
 校验规则：
 
-- 所有字段都是必填，代码中不设默认值，配置里缺什么就报什么。
+- 除 `llm.fallback` 外，所有字段都是必填，代码中不设默认值，配置里缺什么就报什么。
 - 禁止未知字段（`extra="forbid"`），拼错的键名会直接报错而不是被忽略。
 - 值域约束：分数类字段限定 `0-100`，时长与并发类字段必须大于 0，`timezone_hours` 限定 `-12` 到 `14`。
-- 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`llm.models` 必须齐备 `low`、`medium`、`high` 三档且模型名非空；`prompts.domains` 必须至少声明一个领域，且每个领域必须配好三类 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
+- 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`llm.models` 必须齐备 `low`、`medium`、`high` 三档且模型名非空；`llm.fallback` 可选，写了就必须是非空模型名，且不进 `models` 字典；`prompts.domains` 必须至少声明一个领域，且每个领域必须配好三类 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
 - 初始化时还会解析相对路径并检查 prompt 与 `base_opml` 文件可读，避免进入循环后才失败。
 
 配置文件缺失、YAML 语法错误、顶层不是映射，或任一字段校验失败时，`load_config()` 会用 `logging` 打印失败原因和逐条问题位置，然后 `sys.exit(1)` 退出，不进入主流程。
@@ -324,6 +329,7 @@ llm:
     low: gpt-5.4                      # 评分、即时快讯
     medium: gpt-5.6-luna              # 定时汇总
     high: gpt-5.6-sol                 # 预留升档位，当前无调用点
+  fallback: gpt-5.4                   # 可选；三档共用的同接口备用模型，须与当前档主模型不同
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
   max_prompt_chars: 64000

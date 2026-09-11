@@ -81,6 +81,7 @@ async def call_llm(
     prompt: str,
     tier: ModelTier,
     response_format: Optional[Dict] = None,
+    allow_fallback: bool = True,
 ) -> str:
     """调用LLM API - 统一使用OpenAI兼容接口
 
@@ -88,9 +89,11 @@ async def call_llm(
         prompt: 完整提示词
         tier: 模型档位；调用方必须显式声明，失败不会跨档回落
         response_format: 可选的结构化输出配置
+        allow_fallback: 主模型失败后是否改用 llm.fallback 再请求一次
     """
     config = get_config().llm
     model = config.model_for(tier)
+    fallback = config.fallback
     base_url = config.baseUrl
     max_retries = config.max_retries
 
@@ -120,20 +123,36 @@ async def call_llm(
     def generate_error(msg):
         return RuntimeError(f"LLM API错误: {msg}")
 
+    async def request_once(session, model_name: str):
+        request_payload = {**payload, "model": model_name}
+        async with session.post(url, headers=headers, json=request_payload) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                return None, generate_error(f"{resp.status} - {text}"), resp.status
+            data = await resp.json()
+            return data["choices"][0]["message"]["content"], None, resp.status
+
     async with aiohttp.ClientSession() as session:
         for attempt in range(max_retries):
-            async with session.post(url, headers=headers, json=payload) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    last_error = generate_error(f"{resp.status} - {text}")
-                    if resp.status in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
-                        print(f"⚠️ LLM API错误{resp.status}: 第{attempt + 1}次重试")
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    raise last_error
+            content, last_error, status = await request_once(session, model)
+            if content is not None:
+                return content
+            if status in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
+                print(f"⚠️ LLM API错误{status}: 第{attempt + 1}次重试")
+                await asyncio.sleep(2 ** attempt)
+                continue
+            break
 
-                data = await resp.json()
-                return data["choices"][0]["message"]["content"]
+        if allow_fallback and fallback and fallback != model:
+            content, fallback_error, _ = await request_once(session, fallback)
+            if content is not None:
+                print(
+                    f"⚠️ LLM 已切换到兜底模型 | 档位: {tier.value}, "
+                    f"主模型: {model}, 兜底: {fallback}"
+                )
+                return content
+            if fallback_error is not None:
+                last_error = fallback_error
 
     raise last_error
 
@@ -142,7 +161,8 @@ async def _check_tier_available(tier: ModelTier, timeout_seconds: int) -> None:
     """探测单个档位；失败或超时都抛出带档位名的错误。"""
     try:
         response = await asyncio.wait_for(
-            call_llm("Reply with OK only.", tier), timeout=timeout_seconds
+            call_llm("Reply with OK only.", tier, allow_fallback=False),
+            timeout=timeout_seconds,
         )
     except asyncio.TimeoutError as exc:
         raise RuntimeError(f"{tier.value} 档超时({timeout_seconds}s)") from exc

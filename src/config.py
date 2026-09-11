@@ -155,6 +155,7 @@ class LLMConfig(ConfigModel):
 
     provider: Literal["openai"]
     models: Dict[ModelTier, NonEmptyStr]
+    fallback: Optional[NonEmptyStr] = None
     baseUrl: NonEmptyStr
     apiKeyName: EnvVarName
     max_prompt_chars: PositiveInt

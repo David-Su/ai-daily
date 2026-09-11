@@ -3,27 +3,39 @@
 
 # 评分筛选
 filter:
-  min_score: 70                        # 汇总推送的最低分
-  hot_threshold: 90                    # 达到该分数触发即时推送
-  context_days: 2                      # 收集待推送条目回溯天数
-  keep_days: 7                         # 本地归档保留天数
-  push_context_days: 5                 # 近期已推送标题回溯天数
-  no_content_marker: "[NO_NEW_CONTENT]" # LLM 判定无新内容时的标记
+  # 汇总推送的最低分
+  min_score: 70
+  # 达到该分数触发即时推送
+  hot_threshold: 90
+  # 收集待推送条目回溯天数
+  context_days: 2
+  # 本地归档保留天数
+  keep_days: 7
+  # 近期已推送标题回溯天数
+  push_context_days: 5
+  # LLM 判定无新内容时的标记
+  no_content_marker: "[NO_NEW_CONTENT]"
 
 # 去重
 dedupe:
-  fuzzy_enabled: false                 # 是否启用 rapidfuzz 模糊去重
-  content_threshold: 90                # 模糊去重相似度阈值
+  # 是否启用 rapidfuzz 模糊去重
+  fuzzy_enabled: false
+  # 模糊去重相似度阈值
+  content_threshold: 90
 
 # 调度
 schedule:
-  fetch_interval_minutes: 120          # 抓取间隔
-  fetch_lookback_minutes: 180          # 抓取回溯窗口
-  push_cron:                           # 汇总推送时间（cron）
+  fetch_interval_minutes: 120
+  # 抓取回溯窗口
+  fetch_lookback_minutes: 180
+  # 汇总推送时间（cron）
+  push_cron:
     - "30 9 * * *"
-  hot_push_block_periods:              # 即时推送静默时段 [开始, 结束]
+  # 即时推送静默时段 [开始, 结束]
+  hot_push_block_periods:
     - ["01:00", "09:31"]
-  timezone_hours: 8                    # 展示时区偏移
+  # 展示时区偏移
+  timezone_hours: 8
 
 # 抓取
 fetch:
@@ -33,19 +45,29 @@ fetch:
 # LLM
 llm:
   provider: openai
-  models:                             # 档位 -> 模型名；三档必须齐全
-    low: gpt-5.6-luna                 # 评分、即时快讯
-    medium: gpt-5.6-terra             # 定时汇总
-    high: gpt-5.6-luna                # 预留升档位，当前无调用点
-  baseUrl: https://www.rightapi.ai/codex/v1
-  apiKeyName: RIGHT_CODE_API_KEY      # API Key 对应的环境变量名
-  max_prompt_chars: 64000             # 单次评分 prompt 字符上限
-  digest_max_input_tokens: 450000     # digest 输入 token 上限
+  # 档位 -> 模型名；三档必须齐全
+  models:
+    # 评分、即时快讯
+    low: grok-4.6
+    # 定时汇总
+    medium: grok-4.6
+    # 预留升档位，当前无调用点
+    high: grok-4.6
+  # 可选；三档共用的同接口备用模型，须与当前档主模型不同
+  # fallback: grok-4
+  baseUrl: https://rightapi.ai/grok/v1
+  # API Key 对应的环境变量名
+  apiKeyName: RIGHT_CODE_API_KEY
+  # 单次评分 prompt 字符上限
+  max_prompt_chars: 64000
+  # digest 输入 token 上限
+  digest_max_input_tokens: 450000
   max_concurrent_batches: 3
   max_retries: 3
   startup_timeout_seconds: 15
   prompts:
-    domains:                           # 所有声明的 domain 均启用，声明顺序决定推送顺序
+    # 所有声明的 domain 均启用，声明顺序决定推送顺序
+    domains:
       AI:
         score_standard: prompts/score/ai/score_standard.md
         digest: prompts/digest/ai/digest.md
@@ -69,12 +91,13 @@ push:
     usernameKeyName: GMAIL_USERNAME
     passwordKeyName: GMAIL_APP_PASSWORD
     toKeyName: GMAIL_TO
-    fromName: AI Daily                # 发件人显示名
+    fromName: AI Daily
 
 # RSS 源：base_opml + add - block - block_domains
 sources:
   base_opml: resources/rss.opml
-  sync:                               # 定期拉取远端 OPML 覆盖 base_opml
+  # 定期拉取远端 OPML 覆盖 base_opml
+  sync:
     enabled: true
     cron: "0 4 * * 0"
     backup: true
@@ -89,7 +112,8 @@ sources:
       - https://raw.githubusercontent.com/Evan-XYZ/tib-rss-list/refs/heads/main/sources.opml
       - https://raw.githubusercontent.com/plenaryapp/awesome-rss-feeds/refs/heads/master/recommended/with_category/Business%20%26%20Economy.opml
       - https://raw.githubusercontent.com/plenaryapp/awesome-rss-feeds/refs/heads/master/recommended/with_category/Personal%20finance.opml
-  add:                                # 自定义补充源
+  # 自定义补充源
+  add:
     - title: OpenAI News
       xmlUrl: https://openai.com/news/rss.xml
       category: AI
@@ -111,9 +135,11 @@ sources:
     - title: 商界新闻
       xmlUrl: https://plink.anyfeeder.com/jiemian/business
       category: Startups
-  block:                              # 按 xmlUrl 屏蔽单个源
+  # 按 xmlUrl 屏蔽单个源
+  block:
     - xmlUrl: https://dev.to/feed
     - xmlUrl: https://github.com/openclaw/openclaw/commits/main.atom
-  block_domains:                      # 按域名屏蔽，支持 *.example.com
+  # 按域名屏蔽，支持 *.example.com
+  block_domains:
     - "*.proceedings.mlr.press"
     - "*.youtube.com"

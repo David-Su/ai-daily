@@ -101,6 +101,66 @@ def _llm_config(**overrides) -> LLMConfig:
     return _config().llm.model_copy(update=overrides)
 
 
+def _install_llm_http(monkeypatch, replies, **llm_overrides):
+    """安装脚本化的 LLM HTTP 桩。replies 为 (status, body) 队列或按模型名返回的函数。"""
+    import src.llm as llm_module
+
+    requests = []
+    queue = None if callable(replies) else list(replies)
+
+    class FakeResponse:
+        def __init__(self, status, body):
+            self.status = status
+            self._body = body
+
+        async def text(self):
+            return self._body if isinstance(self._body, str) else "error"
+
+        async def json(self):
+            if isinstance(self._body, dict):
+                return self._body
+            return {"choices": [{"message": {"content": self._body}}]}
+
+    class FakeRequest:
+        def __init__(self, response):
+            self._response = response
+
+        async def __aenter__(self):
+            return self._response
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        def post(self, *args, **kwargs):
+            requests.append((args, kwargs))
+            model = kwargs["json"]["model"]
+            status, body = replies(model) if queue is None else queue.pop(0)
+            return FakeRequest(FakeResponse(status, body))
+
+    async def no_wait(_):
+        return None
+
+    monkeypatch.setenv("TEST_LLM_API_KEY", "test-key")
+    monkeypatch.setitem(
+        sys.modules, "aiohttp", SimpleNamespace(ClientSession=FakeSession)
+    )
+    monkeypatch.setattr(llm_module.asyncio, "sleep", no_wait)
+    custom_llm = _llm_config(
+        baseUrl="https://example.com/v1",
+        apiKeyName="TEST_LLM_API_KEY",
+        **llm_overrides,
+    )
+    _install_config(_config().model_copy(update={"llm": custom_llm}))
+    return requests, custom_llm
+
+
 def _sources_config(**overrides) -> SourcesConfig:
     """构造测试用 SourcesConfig，未指定的字段用最小合法值填充。"""
     sync = {
@@ -481,6 +541,148 @@ async def test_call_llm_retries_cloudflare_524(monkeypatch):
     assert sent_models == [custom_llm.models[ModelTier.MEDIUM]] * 2
 
 
+def _distinct_tier_models():
+    return {
+        ModelTier.LOW: "low-model",
+        ModelTier.MEDIUM: "medium-model",
+        ModelTier.HIGH: "high-model",
+    }
+
+
+@pytest.mark.asyncio
+async def test_call_llm_skips_fallback_when_primary_succeeds(monkeypatch, capsys):
+    import src.llm as llm_module
+
+    requests, custom_llm = _install_llm_http(
+        monkeypatch,
+        [(200, "primary ok")],
+        models=_distinct_tier_models(),
+        fallback="backup-model",
+        max_retries=2,
+    )
+
+    result = await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert result == "primary ok"
+    assert sent_models == ["medium-model"]
+    assert "backup-model" not in sent_models
+    assert "兜底" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_call_llm_falls_back_once_after_retryable_exhausted(monkeypatch, capsys):
+    import src.llm as llm_module
+
+    requests, custom_llm = _install_llm_http(
+        monkeypatch,
+        [(500, "boom"), (500, "boom"), (200, "fallback ok")],
+        models=_distinct_tier_models(),
+        fallback="backup-model",
+        max_retries=2,
+    )
+
+    result = await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    urls = [args[0] for args, _ in requests]
+    auths = [kwargs["headers"]["Authorization"] for _, kwargs in requests]
+    assert result == "fallback ok"
+    assert sent_models == ["medium-model", "medium-model", "backup-model"]
+    assert sent_models[-1] != custom_llm.models[ModelTier.LOW]
+    assert len(set(urls)) == 1
+    assert len(set(auths)) == 1
+    log = capsys.readouterr().out
+    assert "medium" in log and "medium-model" in log and "backup-model" in log
+
+
+@pytest.mark.asyncio
+async def test_call_llm_falls_back_immediately_on_404(monkeypatch):
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(404, "missing"), (200, "fallback ok")],
+        models=_distinct_tier_models(),
+        fallback="backup-model",
+        max_retries=3,
+    )
+
+    result = await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert result == "fallback ok"
+    assert sent_models == ["medium-model", "backup-model"]
+
+
+@pytest.mark.asyncio
+async def test_call_llm_does_not_retry_failed_fallback(monkeypatch):
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(404, "missing"), (500, "fallback down")],
+        models=_distinct_tier_models(),
+        fallback="backup-model",
+        max_retries=3,
+    )
+
+    with pytest.raises(RuntimeError, match="LLM API错误: 500"):
+        await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert sent_models == ["medium-model", "backup-model"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallback",
+    [None, "medium-model"],
+    ids=["missing", "same_name"],
+)
+async def test_call_llm_does_not_switch_when_fallback_missing_or_same(monkeypatch, fallback):
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(404, "missing")],
+        models=_distinct_tier_models(),
+        fallback=fallback,
+        max_retries=3,
+    )
+
+    with pytest.raises(RuntimeError, match="LLM API错误: 404"):
+        await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert sent_models == ["medium-model"]
+
+
+@pytest.mark.asyncio
+async def test_call_llm_always_starts_with_primary_model(monkeypatch):
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(404, "missing"), (200, "first"), (404, "missing"), (200, "second")],
+        models=_distinct_tier_models(),
+        fallback="backup-model",
+        max_retries=2,
+    )
+
+    first = await llm_module.call_llm("first", ModelTier.MEDIUM)
+    second = await llm_module.call_llm("second", ModelTier.MEDIUM)
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert (first, second) == ("first", "second")
+    assert sent_models == [
+        "medium-model",
+        "backup-model",
+        "medium-model",
+        "backup-model",
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "task, expected_tier",
@@ -529,7 +731,8 @@ async def test_check_llm_available_probes_every_tier_silently(monkeypatch):
 
     probed = []
 
-    async def fake_call_llm(prompt, tier):
+    async def fake_call_llm(prompt, tier, allow_fallback=True):
+        assert allow_fallback is False
         probed.append(tier)
         return "OK"
 
@@ -544,7 +747,7 @@ async def test_check_llm_available_aborts_on_single_tier_failure(monkeypatch):
     """单档不可用即中断启动，错误信息含该档位名。"""
     import src.llm as llm_module
 
-    async def fake_call_llm(prompt, tier):
+    async def fake_call_llm(prompt, tier, allow_fallback=True):
         if tier is ModelTier.HIGH:
             raise RuntimeError("模型不存在")
         return "OK"
@@ -565,7 +768,7 @@ async def test_check_llm_available_reports_timeout_and_all_failed_tiers(monkeypa
     """超时按档位报告；多档失败时错误信息覆盖全部失败档位。"""
     import src.llm as llm_module
 
-    async def fake_call_llm(prompt, tier):
+    async def fake_call_llm(prompt, tier, allow_fallback=True):
         if tier is ModelTier.LOW:
             raise asyncio.TimeoutError()
         if tier is ModelTier.MEDIUM:
@@ -588,13 +791,95 @@ async def test_check_llm_available_rejects_empty_response(monkeypatch):
     """某档返回空响应视为不可用。"""
     import src.llm as llm_module
 
-    async def fake_call_llm(prompt, tier):
+    async def fake_call_llm(prompt, tier, allow_fallback=True):
         return "   " if tier is ModelTier.MEDIUM else "OK"
 
     monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
 
     with pytest.raises(RuntimeError, match="medium"):
         await check_llm_available()
+
+
+@pytest.mark.asyncio
+async def test_check_llm_available_does_not_use_fallback(monkeypatch):
+    """已配置兜底时，某档主模型探测失败仍中断启动，且请求不含兜底名。"""
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        lambda model: (404, "missing") if model == "high-model" else (200, "OK"),
+        models=_distinct_tier_models(),
+        fallback="backup-model",
+        max_retries=2,
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await check_llm_available()
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert "high" in str(excinfo.value)
+    assert "high-model" in sent_models
+    assert "backup-model" not in sent_models
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "task, expected_primary",
+    [
+        ("score", "low-model"),
+        ("immediate", "low-model"),
+        ("digest", "medium-model"),
+    ],
+)
+async def test_runtime_call_sites_use_fallback_by_default(
+    monkeypatch, task, expected_primary
+):
+    """评分、快讯、汇总只传 prompt 与档位，主模型失败后会打到兜底。"""
+    import src.llm as llm_module
+
+    domain = _domain(_config())
+    entries = _sample_entries(domain)
+    entries[0]["score"] = 95
+    entries[0]["summary"] = "Release summary"
+    score_body = {
+        "items": [
+            {
+                "id": 0,
+                "link": entries[0]["link"],
+                "tags": ["release"],
+                "domain": domain,
+                "score": 88,
+                "summary": "ok",
+            }
+        ]
+    }
+
+    def replies(model):
+        if model == "backup-model":
+            return 200, json.dumps(score_body) if task == "score" else "# ok"
+        return 404, "missing"
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        replies,
+        models=_distinct_tier_models(),
+        fallback="backup-model",
+        max_retries=2,
+    )
+    monkeypatch.setattr(llm_module, "_count_digest_tokens", lambda prompt: 0)
+
+    if task == "score":
+        result = await score_batch(entries)
+        assert result[0]["score"] == 88
+    elif task == "immediate":
+        content, error = await generate_immediate_push([entries[0]], domain=domain)
+        assert error is None
+        assert content == "# ok"
+    else:
+        content = await compose_digest([entries[0]], [], domain=domain)
+        assert content == "# ok"
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert sent_models[0] == expected_primary
+    assert sent_models[-1] == "backup-model"
 
 
 @pytest.mark.parametrize(
@@ -618,6 +903,29 @@ def test_llm_config_rejects_invalid_tier_configurations(mutate, expected_error):
         AppConfig.model_validate(raw)
 
     assert expected_error in str(excinfo.value)
+
+
+def test_llm_config_accepts_missing_fallback():
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["llm"].pop("fallback", None)
+
+    config = AppConfig.model_validate(raw)
+
+    assert config.llm.fallback is None
+    assert config.llm.model_for(ModelTier.LOW) == config.llm.models[ModelTier.LOW]
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_llm_config_rejects_blank_fallback(value):
+    from pydantic import ValidationError
+
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["llm"]["fallback"] = value
+
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.model_validate(raw)
+
+    assert "llm.fallback" in str(excinfo.value)
 
 
 def test_sources_merge_and_html_processing():
