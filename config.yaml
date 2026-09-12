@@ -54,8 +54,8 @@ llm:
     # 预留升档位，当前无调用点
     high: grok-4.6
   # 可选；三档共用的同接口备用模型，须与当前档主模型不同
-  # fallback: grok-4
-  baseUrl: https://rightapi.ai/grok/v1
+  fallback: grok-4.5
+  baseUrl: https://rightapi.ai/v1
   # API Key 对应的环境变量名
   apiKeyName: RIGHT_CODE_API_KEY
   # 单次评分 prompt 字符上限
