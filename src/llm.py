@@ -103,10 +103,11 @@ async def call_llm(
 
     import aiohttp
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    def auth_headers(key: str) -> dict:
+        return {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
 
     payload = {
         "model": model,
@@ -117,15 +118,18 @@ async def call_llm(
         payload["response_format"] = response_format
 
     url = f"{base_url}/chat/completions"
+    headers = auth_headers(api_key)
 
     last_error = None
 
     def generate_error(msg):
         return RuntimeError(f"LLM API错误: {msg}")
 
-    async def request_once(session, model_name: str):
+    async def request_once(session, model_name: str, request_url: str, request_headers):
         request_payload = {**payload, "model": model_name}
-        async with session.post(url, headers=headers, json=request_payload) as resp:
+        async with session.post(
+            request_url, headers=request_headers, json=request_payload
+        ) as resp:
             if resp.status != 200:
                 text = await resp.text()
                 return None, generate_error(f"{resp.status} - {text}"), resp.status
@@ -134,7 +138,9 @@ async def call_llm(
 
     async with aiohttp.ClientSession() as session:
         for attempt in range(max_retries):
-            content, last_error, status = await request_once(session, model)
+            content, last_error, status = await request_once(
+                session, model, url, headers
+            )
             if content is not None:
                 return content
             if status in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
@@ -143,12 +149,22 @@ async def call_llm(
                 continue
             break
 
-        if allow_fallback and fallback and fallback != model:
-            content, fallback_error, _ = await request_once(session, fallback)
+        if allow_fallback and fallback:
+            fallback_key = os.environ.get(fallback.apiKeyName)
+            if not fallback_key:
+                raise ValueError(f"未设置{fallback.apiKeyName}环境变量")
+            fallback_url = f"{fallback.baseUrl}/chat/completions"
+            content, fallback_error, _ = await request_once(
+                session,
+                fallback.model,
+                fallback_url,
+                auth_headers(fallback_key),
+            )
             if content is not None:
                 print(
                     f"⚠️ LLM 已切换到兜底模型 | 档位: {tier.value}, "
-                    f"主模型: {model}, 兜底: {fallback}"
+                    f"主模型: {model}, 兜底: {fallback.model}, "
+                    f"主地址: {base_url}, 兜底地址: {fallback.baseUrl}"
                 )
                 return content
             if fallback_error is not None:

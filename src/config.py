@@ -150,12 +150,25 @@ class ModelTier(str, Enum):
     HIGH = "high"
 
 
+class LLMFallbackConfig(ConfigModel):
+    """独立兜底端点；写了则三项都必填，不继承主接口。"""
+
+    model: NonEmptyStr
+    baseUrl: NonEmptyStr
+    apiKeyName: EnvVarName
+
+    @field_validator("baseUrl")
+    @classmethod
+    def check_base_url(cls, value: str) -> str:
+        return _validate_http_url(value).rstrip("/")
+
+
 class LLMConfig(ConfigModel):
     """LLM 接口与批处理参数"""
 
     provider: Literal["openai"]
     models: Dict[ModelTier, NonEmptyStr]
-    fallback: Optional[NonEmptyStr] = None
+    fallback: Optional[LLMFallbackConfig] = None
     baseUrl: NonEmptyStr
     apiKeyName: EnvVarName
     max_prompt_chars: PositiveInt

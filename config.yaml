@@ -45,6 +45,7 @@ fetch:
 # LLM
 llm:
   provider: openai
+  baseUrl: https://www.rightapi.ai/v1
   # 档位 -> 模型名；三档必须齐全
   models:
     # 评分、即时快讯
@@ -53,9 +54,11 @@ llm:
     medium: grok-4.6
     # 预留升档位，当前无调用点
     high: grok-4.6
-  # 可选；三档共用的同接口备用模型，须与当前档主模型不同
-  fallback: grok-4.5
-  baseUrl: https://rightapi.ai/v1
+  # 可选；独立兜底端点，须自带型号、地址和 Key 名
+  fallback:
+    model: meta/muse-spark-1.3-contributor
+    baseUrl: https://openrouter.ai/api/v1
+    apiKeyName: OPENROUTER_API_KEY
   # API Key 对应的环境变量名
   apiKeyName: RIGHT_CODE_API_KEY
   # 单次评分 prompt 字符上限

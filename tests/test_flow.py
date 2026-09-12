@@ -98,7 +98,19 @@ def _install_config(config: AppConfig) -> AppConfig:
 
 def _llm_config(**overrides) -> LLMConfig:
     """构造测试用 LLMConfig，只覆盖当前用例关心的字段。"""
-    return _config().llm.model_copy(update=overrides)
+    data = _config().llm.model_dump()
+    data.update(overrides)
+    return LLMConfig.model_validate(data)
+
+
+def _fallback_endpoint(**overrides) -> dict:
+    data = {
+        "model": "backup-model",
+        "baseUrl": "https://fallback.example.com/v1",
+        "apiKeyName": "TEST_FALLBACK_API_KEY",
+    }
+    data.update(overrides)
+    return data
 
 
 def _install_llm_http(monkeypatch, replies, **llm_overrides):
@@ -107,6 +119,8 @@ def _install_llm_http(monkeypatch, replies, **llm_overrides):
 
     requests = []
     queue = None if callable(replies) else list(replies)
+    overrides = dict(llm_overrides)
+    overrides.setdefault("fallback", None)
 
     class FakeResponse:
         def __init__(self, status, body):
@@ -147,7 +161,6 @@ def _install_llm_http(monkeypatch, replies, **llm_overrides):
     async def no_wait(_):
         return None
 
-    monkeypatch.setenv("TEST_LLM_API_KEY", "test-key")
     monkeypatch.setitem(
         sys.modules, "aiohttp", SimpleNamespace(ClientSession=FakeSession)
     )
@@ -155,8 +168,11 @@ def _install_llm_http(monkeypatch, replies, **llm_overrides):
     custom_llm = _llm_config(
         baseUrl="https://example.com/v1",
         apiKeyName="TEST_LLM_API_KEY",
-        **llm_overrides,
+        **overrides,
     )
+    monkeypatch.setenv("TEST_LLM_API_KEY", "test-key")
+    if custom_llm.fallback is not None:
+        monkeypatch.setenv(custom_llm.fallback.apiKeyName, "fallback-key")
     _install_config(_config().model_copy(update={"llm": custom_llm}))
     return requests, custom_llm
 
@@ -553,20 +569,21 @@ def _distinct_tier_models():
 async def test_call_llm_skips_fallback_when_primary_succeeds(monkeypatch, capsys):
     import src.llm as llm_module
 
-    requests, custom_llm = _install_llm_http(
+    requests, _ = _install_llm_http(
         monkeypatch,
         [(200, "primary ok")],
         models=_distinct_tier_models(),
-        fallback="backup-model",
+        fallback=_fallback_endpoint(),
         max_retries=2,
     )
 
     result = await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
 
     sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    sent_urls = [args[0] for args, _ in requests]
     assert result == "primary ok"
     assert sent_models == ["medium-model"]
-    assert "backup-model" not in sent_models
+    assert all("fallback.example.com" not in url for url in sent_urls)
     assert "兜底" not in capsys.readouterr().out
 
 
@@ -578,7 +595,7 @@ async def test_call_llm_falls_back_once_after_retryable_exhausted(monkeypatch, c
         monkeypatch,
         [(500, "boom"), (500, "boom"), (200, "fallback ok")],
         models=_distinct_tier_models(),
-        fallback="backup-model",
+        fallback=_fallback_endpoint(),
         max_retries=2,
     )
 
@@ -590,21 +607,25 @@ async def test_call_llm_falls_back_once_after_retryable_exhausted(monkeypatch, c
     assert result == "fallback ok"
     assert sent_models == ["medium-model", "medium-model", "backup-model"]
     assert sent_models[-1] != custom_llm.models[ModelTier.LOW]
-    assert len(set(urls)) == 1
-    assert len(set(auths)) == 1
+    assert urls[-1] == "https://fallback.example.com/v1/chat/completions"
+    assert urls[0] != urls[-1]
+    assert auths[0] != auths[-1]
     log = capsys.readouterr().out
     assert "medium" in log and "medium-model" in log and "backup-model" in log
+    assert "https://example.com/v1" in log
+    assert "https://fallback.example.com/v1" in log
 
 
 @pytest.mark.asyncio
-async def test_call_llm_falls_back_immediately_on_404(monkeypatch):
+@pytest.mark.parametrize("status", [404, 401], ids=["404", "401"])
+async def test_call_llm_falls_back_immediately_on_non_retryable(monkeypatch, status):
     import src.llm as llm_module
 
     requests, _ = _install_llm_http(
         monkeypatch,
-        [(404, "missing"), (200, "fallback ok")],
+        [(status, "fail"), (200, "fallback ok")],
         models=_distinct_tier_models(),
-        fallback="backup-model",
+        fallback=_fallback_endpoint(),
         max_retries=3,
     )
 
@@ -623,7 +644,7 @@ async def test_call_llm_does_not_retry_failed_fallback(monkeypatch):
         monkeypatch,
         [(404, "missing"), (500, "fallback down")],
         models=_distinct_tier_models(),
-        fallback="backup-model",
+        fallback=_fallback_endpoint(),
         max_retries=3,
     )
 
@@ -635,19 +656,14 @@ async def test_call_llm_does_not_retry_failed_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "fallback",
-    [None, "medium-model"],
-    ids=["missing", "same_name"],
-)
-async def test_call_llm_does_not_switch_when_fallback_missing_or_same(monkeypatch, fallback):
+async def test_call_llm_does_not_switch_when_fallback_missing(monkeypatch):
     import src.llm as llm_module
 
     requests, _ = _install_llm_http(
         monkeypatch,
         [(404, "missing")],
         models=_distinct_tier_models(),
-        fallback=fallback,
+        fallback=None,
         max_retries=3,
     )
 
@@ -659,6 +675,30 @@ async def test_call_llm_does_not_switch_when_fallback_missing_or_same(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_call_llm_falls_back_when_model_name_matches(monkeypatch):
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(404, "missing"), (200, "fallback ok")],
+        models=_distinct_tier_models(),
+        fallback=_fallback_endpoint(model="medium-model"),
+        max_retries=3,
+    )
+
+    result = await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    urls = [args[0] for args, _ in requests]
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert result == "fallback ok"
+    assert sent_models == ["medium-model", "medium-model"]
+    assert urls == [
+        "https://example.com/v1/chat/completions",
+        "https://fallback.example.com/v1/chat/completions",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_call_llm_always_starts_with_primary_model(monkeypatch):
     import src.llm as llm_module
 
@@ -666,7 +706,7 @@ async def test_call_llm_always_starts_with_primary_model(monkeypatch):
         monkeypatch,
         [(404, "missing"), (200, "first"), (404, "missing"), (200, "second")],
         models=_distinct_tier_models(),
-        fallback="backup-model",
+        fallback=_fallback_endpoint(),
         max_retries=2,
     )
 
@@ -674,6 +714,7 @@ async def test_call_llm_always_starts_with_primary_model(monkeypatch):
     second = await llm_module.call_llm("second", ModelTier.MEDIUM)
 
     sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    urls = [args[0] for args, _ in requests]
     assert (first, second) == ("first", "second")
     assert sent_models == [
         "medium-model",
@@ -681,6 +722,45 @@ async def test_call_llm_always_starts_with_primary_model(monkeypatch):
         "medium-model",
         "backup-model",
     ]
+    assert urls[0] == urls[2] == "https://example.com/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_missing_primary_key_skips_fallback(monkeypatch):
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(200, "should not run")],
+        models=_distinct_tier_models(),
+        fallback=_fallback_endpoint(),
+    )
+    monkeypatch.delenv("TEST_LLM_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="TEST_LLM_API_KEY"):
+        await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    assert requests == []
+
+
+@pytest.mark.asyncio
+async def test_call_llm_missing_fallback_key_skips_fallback_http(monkeypatch):
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(404, "missing")],
+        models=_distinct_tier_models(),
+        fallback=_fallback_endpoint(),
+        max_retries=2,
+    )
+    monkeypatch.delenv("TEST_FALLBACK_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="TEST_FALLBACK_API_KEY"):
+        await llm_module.call_llm("test prompt", ModelTier.MEDIUM)
+
+    sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    assert sent_models == ["medium-model"]
 
 
 @pytest.mark.asyncio
@@ -807,7 +887,7 @@ async def test_check_llm_available_does_not_use_fallback(monkeypatch):
         monkeypatch,
         lambda model: (404, "missing") if model == "high-model" else (200, "OK"),
         models=_distinct_tier_models(),
-        fallback="backup-model",
+        fallback=_fallback_endpoint(),
         max_retries=2,
     )
 
@@ -815,9 +895,11 @@ async def test_check_llm_available_does_not_use_fallback(monkeypatch):
         await check_llm_available()
 
     sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    sent_urls = [args[0] for args, _ in requests]
     assert "high" in str(excinfo.value)
     assert "high-model" in sent_models
     assert "backup-model" not in sent_models
+    assert all("fallback.example.com" not in url for url in sent_urls)
 
 
 @pytest.mark.asyncio
@@ -861,7 +943,7 @@ async def test_runtime_call_sites_use_fallback_by_default(
         monkeypatch,
         replies,
         models=_distinct_tier_models(),
-        fallback="backup-model",
+        fallback=_fallback_endpoint(),
         max_retries=2,
     )
     monkeypatch.setattr(llm_module, "_count_digest_tokens", lambda prompt: 0)
@@ -878,8 +960,10 @@ async def test_runtime_call_sites_use_fallback_by_default(
         assert content == "# ok"
 
     sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
+    sent_urls = [args[0] for args, _ in requests]
     assert sent_models[0] == expected_primary
     assert sent_models[-1] == "backup-model"
+    assert sent_urls[-1] == "https://fallback.example.com/v1/chat/completions"
 
 
 @pytest.mark.parametrize(
@@ -915,12 +999,46 @@ def test_llm_config_accepts_missing_fallback():
     assert config.llm.model_for(ModelTier.LOW) == config.llm.models[ModelTier.LOW]
 
 
-@pytest.mark.parametrize("value", ["", "   "])
-def test_llm_config_rejects_blank_fallback(value):
+def test_llm_config_accepts_complete_fallback_object():
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+
+    config = AppConfig.model_validate(raw)
+
+    assert config.llm.fallback is not None
+    assert config.llm.fallback.model
+    assert config.llm.fallback.baseUrl != config.llm.baseUrl
+    assert config.llm.fallback.apiKeyName != config.llm.apiKeyName
+
+
+def test_llm_config_rejects_string_fallback():
     from pydantic import ValidationError
 
     raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-    raw["llm"]["fallback"] = value
+    raw["llm"]["fallback"] = "grok-4.5"
+
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.model_validate(raw)
+
+    assert "llm.fallback" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda fb: fb.pop("model"),
+        lambda fb: fb.pop("baseUrl"),
+        lambda fb: fb.pop("apiKeyName"),
+        lambda fb: fb.update(model="  "),
+        lambda fb: fb.update(baseUrl="  "),
+        lambda fb: fb.update(apiKeyName="  "),
+    ],
+    ids=["missing_model", "missing_url", "missing_key", "blank_model", "blank_url", "blank_key"],
+)
+def test_llm_config_rejects_incomplete_or_blank_fallback(mutate):
+    from pydantic import ValidationError
+
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    mutate(raw["llm"]["fallback"])
 
     with pytest.raises(ValidationError) as excinfo:
         AppConfig.model_validate(raw)

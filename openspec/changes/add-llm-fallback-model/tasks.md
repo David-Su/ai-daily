@@ -5,5 +5,5 @@
 
 ## 2. 运行期切换
 
-- [ ] 2.1 在 `src/llm.py` 的 `call_llm()` 增加 `allow_fallback: bool = True`；主模型按现有 `max_retries` / `RETRYABLE_STATUS_CODES` 结束后，仅当开关为真、`llm.fallback` 有值且与当前档主模型名不同时，用同一 `baseUrl`/Key 再 `post` 恰好一次（不再重试）；成功则打印含档位、主模型名、兜底模型名的日志并返回内容，失败则抛与现有相同的 `RuntimeError`。在 `tests/test_flow.py` 覆盖：主模型成功不出现兜底名、可重试状态打满后切一次成功、`404` 立刻切一次、兜底失败不再打、缺省或同名不切、连续两次调用都先打主模型、`medium` 失败后请求名是 `fallback` 不是 `low`
-- [ ] 2.2 在 `src/llm.py` 的 `_check_tier_available()` 调用 `call_llm(..., allow_fallback=False)`；`_score_single_batch` / `generate_immediate_push` / `compose_digest` 的 `call_llm` 调用保持只传 `prompt` 与 `tier`。在 `tests/test_flow.py` 确认：已配置 `fallback` 时某档主模型探测失败仍中断启动且探测请求不含兜底名；三个业务调用点在主模型失败且备用名不同时会打到兜底
+- [x] 2.1 在 `src/llm.py` 的 `call_llm()` 增加 `allow_fallback: bool = True`；主模型按现有 `max_retries` / `RETRYABLE_STATUS_CODES` 结束后，仅当开关为真、`llm.fallback` 有值且与当前档主模型名不同时，用同一 `baseUrl`/Key 再 `post` 恰好一次（不再重试）；成功则打印含档位、主模型名、兜底模型名的日志并返回内容，失败则抛与现有相同的 `RuntimeError`。在 `tests/test_flow.py` 覆盖：主模型成功不出现兜底名、可重试状态打满后切一次成功、`404` 立刻切一次、兜底失败不再打、缺省或同名不切、连续两次调用都先打主模型、`medium` 失败后请求名是 `fallback` 不是 `low`
+- [x] 2.2 在 `src/llm.py` 的 `_check_tier_available()` 调用 `call_llm(..., allow_fallback=False)`；`_score_single_batch` / `generate_immediate_push` / `compose_digest` 的 `call_llm` 调用保持只传 `prompt` 与 `tier`。在 `tests/test_flow.py` 确认：已配置 `fallback` 时某档主模型探测失败仍中断启动且探测请求不含兜底名；三个业务调用点在主模型失败且备用名不同时会打到兜底
