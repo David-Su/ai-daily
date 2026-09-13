@@ -144,5 +144,7 @@ sources:
     - xmlUrl: https://github.com/openclaw/openclaw/commits/main.atom
   # 按域名屏蔽，支持 *.example.com
   block_domains:
+    # arxiv 偏科研，暂时屏蔽掉
+    - "*.arxiv.org"
     - "*.proceedings.mlr.press"
     - "*.youtube.com"
