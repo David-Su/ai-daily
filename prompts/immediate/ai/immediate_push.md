@@ -63,7 +63,7 @@
 
 **情况 B：有需要推送的新内容**
 
-严格按照以下 Markdown 格式输出（不要输出任何铺垫语）：
+按照以下 ` ```markdown ` 标签内的 Markdown 格式输出（不要输出任何铺垫语）：
 
 ```markdown
 # 🚨 AI Daily AI快讯 | {date:YYYY-MM-DD}
