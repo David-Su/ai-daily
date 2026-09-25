@@ -141,6 +141,7 @@ await asyncio.gather(fetch_loop(), push_loop())
 - 根据原始链接补全相对链接和图片地址。
 - 移除 `xgo.ing` 推广链接。
 - 清理多余空行。
+- 提供 `clean_for_llm`：在构造 LLM 输入（评分、定时汇总、即时快讯）时移除图片标记、推广签名与导购链接并压缩空行；只删噪音、不改写语义，存盘原始内容与 `link` 字段不受影响。
 
 ### `src/llm.py`
 

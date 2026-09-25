@@ -35,3 +35,30 @@ def html_to_markdown(html: str, base_url: str = "") -> str:
     markdown = re.sub(r"\n{3,}", "\n\n", markdown)
 
     return markdown.strip()
+
+
+# 导购短链域名：这类链接只服务购买转化，不承载新闻事实
+_SHOPPING_LINK_HOSTS = ("u\\.jd\\.com",)
+
+_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_SHOPPING_LINK_RE = re.compile(
+    r"\[[^\]]*\]\(https?://(?:" + "|".join(_SHOPPING_LINK_HOSTS) + r")[^)]*\)"
+)
+
+
+def clean_for_llm(text: str) -> str:
+    """
+    清洗送 LLM 的正文：移除图片标记、推广签名与导购链接，压缩多余空行。
+    只删除可判定噪音，不改写正文语义；幂等；不触碰条目其他字段。
+    """
+    if not text:
+        return ""
+
+    cleaned = _IMAGE_RE.sub("", text)
+    cleaned = _SHOPPING_LINK_RE.sub("", cleaned)
+    cleaned = cleaned.replace(
+        "[⚡ Powered by xgo.ing](https://xgo.ing)", ""
+    ).replace("[⚡ Powered by xgo.ing](https://xgo.ing/)", "")
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    return cleaned.strip()

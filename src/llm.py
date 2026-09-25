@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from src.config import LLMConfig, ModelTier, get_config
+from src.processor import clean_for_llm
 
 
 # 仅重试临时性 HTTP 故障；认证、请求参数和上下文超限等 4xx 错误需要人工修复。
@@ -210,14 +211,14 @@ def _build_batch_prompt(config: LLMConfig, entries: List[Dict]) -> str:
     # 构建领域列表
     domain_list = _build_domain_list(config)
 
-    # 构建entries JSON列表（只包含必要字段）
+    # 构建entries JSON列表（只包含必要字段；正文先清洗再截断）
     entries_for_llm = [
         {
             "id": e["id"],
             "title": e.get("title", "无标题"),
             "source": e.get("source", "未知来源"),
             "published": e.get("published", ""),
-            "content": e.get("content", "")[:2000],  # 限制内容长度
+            "content": clean_for_llm(e.get("content", ""))[:2000],  # 限制内容长度
         }
         for e in entries
     ]
@@ -315,7 +316,7 @@ def _split_entries_for_batch(
             **entry,
             "id": index,
         }
-        # 估算该entry在JSON中的字符数
+        # 估算该entry在JSON中的字符数（与评分输入同样先清洗）
         entry_chars = len(
             json.dumps(
                 {
@@ -323,7 +324,7 @@ def _split_entries_for_batch(
                     "title": new_entry.get("title", ""),
                     "source": new_entry.get("source", ""),
                     "published": new_entry.get("published", ""),
-                    "content": new_entry.get("content", "")[:2000],
+                    "content": clean_for_llm(new_entry.get("content", ""))[:2000],
                 },
                 ensure_ascii=False,
             )
@@ -487,7 +488,7 @@ def _merge_scores(entries: List[Dict], scores: List[Dict]) -> List[Dict]:
 
 
 def _get_push_prompt_entries(entries: List[Dict]) -> List[Dict]:
-    """正文为空，用summary内容替代，同时移除summary"""
+    """正文为空，用summary内容替代，同时移除summary；正文统一清洗"""
     result = []
     for entry in entries:
         content = entry.get("content", "")
@@ -495,6 +496,7 @@ def _get_push_prompt_entries(entries: List[Dict]) -> List[Dict]:
         new_entry = {**entry}
         if not content:
             new_entry["content"] = summary
+        new_entry["content"] = clean_for_llm(new_entry.get("content", ""))
         new_entry.pop("summary", None)
         result.append(new_entry)
     return result
