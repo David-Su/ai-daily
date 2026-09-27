@@ -73,7 +73,7 @@ RUN_REAL_LLM_DIGEST = False
 RUN_REAL_PUSH = False
 # 指定一个 fetch 文件路径（相对仓库根目录或绝对路径），配合 RUN_REAL_PUSH_JOB 走真实 digest 流程。
 DEBUG_FETCH_FILE = "news-data/fetch-2026-08-16.json"
-RUN_REAL_PUSH_JOB = True
+RUN_REAL_PUSH_JOB = False
 
 
 def _config():
@@ -84,9 +84,13 @@ def _config():
 @pytest.fixture(autouse=True)
 def initialized_app_config():
     """每个测试独立初始化一次全局 AppConfig。"""
+    import src.main as main_module
+
     config_module._reset_config_for_tests()
+    main_module._rejected_links.clear()
     initialize_config(str(CONFIG_PATH))
     yield
+    main_module._rejected_links.clear()
     config_module._reset_config_for_tests()
 
 
@@ -114,7 +118,8 @@ def _fallback_endpoint(**overrides) -> dict:
 
 
 def _install_llm_http(monkeypatch, replies, **llm_overrides):
-    """安装脚本化的 LLM HTTP 桩。replies 为 (status, body) 队列或按模型名返回的函数。"""
+    """安装 HTTP 桩，响应队列或函数可返回 (status, body) 或异常。"""
+    import aiohttp
     import src.llm as llm_module
 
     requests = []
@@ -140,6 +145,8 @@ def _install_llm_http(monkeypatch, replies, **llm_overrides):
             self._response = response
 
         async def __aenter__(self):
+            if isinstance(self._response, BaseException):
+                raise self._response
             return self._response
 
         async def __aexit__(self, exc_type, exc, traceback):
@@ -155,14 +162,19 @@ def _install_llm_http(monkeypatch, replies, **llm_overrides):
         def post(self, *args, **kwargs):
             requests.append((args, kwargs))
             model = kwargs["json"]["model"]
-            status, body = replies(model) if queue is None else queue.pop(0)
+            reply = replies(model) if queue is None else queue.pop(0)
+            if isinstance(reply, BaseException):
+                return FakeRequest(reply)
+            status, body = reply
             return FakeRequest(FakeResponse(status, body))
 
     async def no_wait(_):
         return None
 
     monkeypatch.setitem(
-        sys.modules, "aiohttp", SimpleNamespace(ClientSession=FakeSession)
+        sys.modules,
+        "aiohttp",
+        SimpleNamespace(ClientSession=FakeSession, ClientError=aiohttp.ClientError),
     )
     monkeypatch.setattr(llm_module.asyncio, "sleep", no_wait)
     custom_llm = _llm_config(
@@ -603,7 +615,7 @@ async def test_call_llm_logs_usage(monkeypatch, capsys, usage_fields, expected_u
 
     assert result == content
     assert capsys.readouterr().out.splitlines() == [
-        f"LLM usage | tier=medium | model=medium-model | usage={expected_usage}"
+        f"📊 LLM usage | tier=medium | model=medium-model | usage={expected_usage}"
     ]
     assert len(requests) == 1
     assert requests[0][1]["json"] == {
@@ -627,9 +639,9 @@ async def test_check_llm_available_logs_usage_for_all_tiers(monkeypatch, capsys)
     await check_llm_available()
 
     assert set(capsys.readouterr().out.splitlines()) == {
-        'LLM usage | tier=low | model=low-model | usage={"total_tokens":3}',
-        'LLM usage | tier=medium | model=medium-model | usage={"total_tokens":3}',
-        'LLM usage | tier=high | model=high-model | usage={"total_tokens":3}',
+        '📊 LLM usage | tier=low | model=low-model | usage={"total_tokens":3}',
+        '📊 LLM usage | tier=medium | model=medium-model | usage={"total_tokens":3}',
+        '📊 LLM usage | tier=high | model=high-model | usage={"total_tokens":3}',
     }
 
 
@@ -646,7 +658,7 @@ async def test_score_failure_keeps_usage_log(monkeypatch, capsys):
         models=_distinct_tier_models(),
     )
 
-    assert await llm_module._score_single_batch([], custom_llm) == []
+    assert await llm_module._score_single_batch([], custom_llm) is None
 
     log = capsys.readouterr().out
     usage_line = 'LLM usage | tier=low | model=low-model | usage={"total_tokens":25}'
@@ -674,6 +686,146 @@ async def test_call_llm_skips_fallback_when_primary_succeeds(monkeypatch, capsys
     assert sent_models == ["medium-model"]
     assert all("fallback.example.com" not in url for url in sent_urls)
     assert "兜底" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["timeout", "connection"])
+async def test_call_llm_retries_transient_exception(monkeypatch, capsys, failure_kind):
+    import aiohttp
+    import src.llm as llm_module
+
+    error = (
+        asyncio.TimeoutError()
+        if failure_kind == "timeout"
+        else aiohttp.ClientConnectionError("connection lost")
+    )
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [error, (200, "primary recovered")],
+        models=_distinct_tier_models(),
+        fallback=_fallback_endpoint(),
+        max_retries=3,
+    )
+    delays = []
+
+    async def record_sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(llm_module.asyncio, "sleep", record_sleep)
+
+    assert await llm_module.call_llm("test", ModelTier.MEDIUM) == "primary recovered"
+    assert [kwargs["json"]["model"] for _, kwargs in requests] == [
+        "medium-model", "medium-model"
+    ]
+    assert delays == [1]
+    log = capsys.readouterr().out
+    assert f"{type(error).__name__}" in log
+    assert "第1次重试" in log
+
+
+@pytest.mark.asyncio
+async def test_call_llm_falls_back_once_after_transient_exhausted(monkeypatch):
+    import aiohttp
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [asyncio.TimeoutError(), aiohttp.ClientConnectionError(), (200, "fallback ok")],
+        models=_distinct_tier_models(),
+        fallback=_fallback_endpoint(),
+        max_retries=2,
+    )
+
+    assert await llm_module.call_llm("test", ModelTier.MEDIUM) == "fallback ok"
+    assert [kwargs["json"]["model"] for _, kwargs in requests] == [
+        "medium-model", "medium-model", "backup-model"
+    ]
+    assert requests[-1][0][0] == "https://fallback.example.com/v1/chat/completions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["timeout", "connection"])
+async def test_call_llm_propagates_fallback_transient_error(monkeypatch, failure_kind):
+    import aiohttp
+    import src.llm as llm_module
+
+    fallback_error = (
+        asyncio.TimeoutError("fallback timeout")
+        if failure_kind == "timeout"
+        else aiohttp.ClientConnectionError("fallback connection")
+    )
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [asyncio.TimeoutError(), asyncio.TimeoutError(), fallback_error],
+        models=_distinct_tier_models(),
+        fallback=_fallback_endpoint(),
+        max_retries=2,
+    )
+
+    with pytest.raises(type(fallback_error)) as exc_info:
+        await llm_module.call_llm("test", ModelTier.MEDIUM)
+
+    assert exc_info.value is fallback_error
+    assert [kwargs["json"]["model"] for _, kwargs in requests] == [
+        "medium-model", "medium-model", "backup-model"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allow_fallback", [True, False])
+async def test_call_llm_raises_last_transient_error_without_fallback(
+    monkeypatch, allow_fallback
+):
+    import aiohttp
+    import src.llm as llm_module
+
+    last_error = aiohttp.ClientConnectionError("last connection error")
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [asyncio.TimeoutError(), last_error],
+        models=_distinct_tier_models(),
+        fallback=None if allow_fallback else _fallback_endpoint(),
+        max_retries=2,
+    )
+
+    with pytest.raises(aiohttp.ClientError) as exc_info:
+        await llm_module.call_llm("test", ModelTier.MEDIUM, allow_fallback=allow_fallback)
+
+    assert exc_info.value is last_error
+    assert len(requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["timeout", "parse"])
+async def test_score_failure_log_includes_exception_type(monkeypatch, capsys, failure_kind):
+    import src.llm as llm_module
+
+    async def fail_call(*args, **kwargs):
+        if failure_kind == "timeout":
+            raise asyncio.TimeoutError()
+        return "invalid score JSON"
+
+    monkeypatch.setattr(llm_module, "call_llm", fail_call)
+    await llm_module._score_single_batch([], _config().llm)
+
+    log = capsys.readouterr().out
+    error_name = "TimeoutError" if failure_kind == "timeout" else "ValueError"
+    assert f"评分失败: {error_name}: " in log
+
+
+@pytest.mark.asyncio
+async def test_immediate_failure_error_matches_typed_log(monkeypatch, capsys):
+    import src.llm as llm_module
+
+    async def fail_call(*args, **kwargs):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(llm_module, "call_llm", fail_call)
+    content, error = await generate_immediate_push([], domain=_domain(_config()))
+
+    assert content == ""
+    assert error == "生成即时推送失败: TimeoutError: "
+    assert error in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
@@ -706,8 +858,8 @@ async def test_call_llm_falls_back_once_after_retryable_exhausted(monkeypatch, c
     assert "medium" in log and "medium-model" in log and "backup-model" in log
     assert "https://example.com/v1" in log
     assert "https://fallback.example.com/v1" in log
-    assert [line for line in log.splitlines() if line.startswith("LLM usage")] == [
-        'LLM usage | tier=medium | model=backup-model | usage={"total_tokens":7}'
+    assert [line for line in log.splitlines() if "LLM usage |" in line] == [
+        '📊 LLM usage | tier=medium | model=backup-model | usage={"total_tokens":7}'
     ]
 
 
@@ -1045,8 +1197,9 @@ async def test_runtime_call_sites_use_fallback_by_default(
     monkeypatch.setattr(llm_module, "_count_digest_tokens", lambda prompt: 0)
 
     if task == "score":
-        result = await score_batch(entries)
+        result, rejected = await score_batch(entries)
         assert result[0]["score"] == 88
+        assert rejected == [entries[1]["link"]]
     elif task == "immediate":
         content, error = await generate_immediate_push([entries[0]], domain=domain)
         assert error is None
@@ -1097,6 +1250,7 @@ def test_llm_config_accepts_missing_fallback():
 
 def test_llm_config_accepts_complete_fallback_object():
     raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["llm"]["fallback"] = _fallback_endpoint()
 
     config = AppConfig.model_validate(raw)
 
@@ -1366,11 +1520,93 @@ async def test_score_step_with_fake_llm(monkeypatch):
 
     monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
 
-    scored = await score_batch(entries)
+    scored, rejected = await score_batch(entries)
 
     assert scored[0]["score"] == 88
     assert scored[0]["domain"] == domain
     assert scored[1]["summary"] == "Funding summary"
+    assert rejected == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_prompt_chars", [100000, 1], ids=["single", "multiple"])
+async def test_score_batch_reports_successful_omissions(monkeypatch, max_prompt_chars):
+    import src.llm as llm_module
+
+    domain = _domain(_config())
+    entries = _sample_entries(domain)
+    custom_llm = _llm_config(max_prompt_chars=max_prompt_chars)
+    _install_config(_config().model_copy(update={"llm": custom_llm}))
+
+    async def fake_call(prompt, tier, response_format=None):
+        items = []
+        if entries[0]["title"] in prompt:
+            items.append({"id": 0, "domain": domain, "score": 88})
+        return json.dumps({"items": items})
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call)
+    scored, rejected = await score_batch(entries)
+
+    assert [entry["link"] for entry in scored] == ["https://example.com/model-release"]
+    assert scored[0]["score"] == 88
+    assert "id" not in scored[0]
+    assert rejected == ["https://example.com/funding-news"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", [False, True], ids=["successful-empty", "failed"])
+async def test_score_batch_distinguishes_failure_from_all_rejected(monkeypatch, failed):
+    import src.llm as llm_module
+
+    entries = _sample_entries(_domain(_config()))
+
+    async def fake_call(*args, **kwargs):
+        if failed:
+            raise asyncio.TimeoutError()
+        return '{"items":[]}'
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call)
+
+    assert await score_batch(entries) == (
+        [], [] if failed else ["https://example.com/model-release", "https://example.com/funding-news"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_score_batch_failed_first_batch_preserves_ids_and_filter_log(monkeypatch, capsys):
+    import src.llm as llm_module
+
+    domain = _domain(_config())
+    entries = _sample_entries(domain)
+    entries.append({
+        **entries[1],
+        "title": "Rejected successful article",
+        "link": "https://example.com/rejected",
+    })
+    _install_config(_config().model_copy(update={"llm": _llm_config(max_prompt_chars=1)}))
+
+    async def fake_call(prompt, tier, response_format=None):
+        if entries[0]["title"] in prompt:
+            raise asyncio.TimeoutError()
+        if entries[1]["title"] in prompt:
+            return json.dumps({"items": [{"id": 1, "domain": domain, "score": 71}]})
+        return '{"items":[]}'
+
+    monkeypatch.setattr(llm_module, "call_llm", fake_call)
+    scored, rejected = await score_batch(entries)
+
+    assert [entry["link"] for entry in scored] == ["https://example.com/funding-news"]
+    assert scored[0]["score"] == 71
+    assert rejected == ["https://example.com/rejected"]
+    log = capsys.readouterr().out
+    assert "评分过滤链接共 1 条" in log
+    assert "https://example.com/rejected" in log
+    assert "https://example.com/model-release" not in log
+
+
+@pytest.mark.asyncio
+async def test_score_batch_empty_input_has_no_rejected_links():
+    assert await score_batch([]) == ([], [])
 
 
 def test_parse_score_response_accepts_legacy_array():
@@ -1493,7 +1729,7 @@ async def test_fetch_job_excludes_unconfigured_domain_results(tmp_path, monkeypa
                 "summary": "Unknown summary",
                 "tags": [],
             },
-        ]
+        ], []
 
     monkeypatch.setattr(
         main_module,
@@ -1770,9 +2006,10 @@ async def test_debug_real_rss_fetch_step():
 async def test_debug_real_llm_score_step():
     """真实 LLM 评分调试；默认跳过，打开 RUN_REAL_LLM_SCORE 后才调用接口。"""
     config = _config()
-    scored = await score_batch(_sample_entries(_domain(config)))
+    scored, rejected = await score_batch(_sample_entries(_domain(config)))
 
     print(json.dumps(scored, ensure_ascii=False, indent=2))
+    print(f"Rejected links: {rejected}")
     assert scored
 
 

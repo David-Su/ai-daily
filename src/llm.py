@@ -11,7 +11,6 @@ from typing import Dict, List, Optional, Tuple
 from src.config import LLMConfig, ModelTier, get_config
 from src.processor import clean_for_llm
 
-
 # 仅重试临时性 HTTP 故障；认证、请求参数和上下文超限等 4xx 错误需要人工修复。
 RETRYABLE_STATUS_CODES = frozenset(
     {
@@ -79,10 +78,10 @@ def load_prompt(prompt_path: str, **kwargs) -> str:
 
 
 async def call_llm(
-    prompt: str,
-    tier: ModelTier,
-    response_format: Optional[Dict] = None,
-    allow_fallback: bool = True,
+        prompt: str,
+        tier: ModelTier,
+        response_format: Optional[Dict] = None,
+        allow_fallback: bool = True,
 ) -> str:
     """调用LLM API - 统一使用OpenAI兼容接口
 
@@ -129,7 +128,7 @@ async def call_llm(
     async def request_once(session, model_name: str, request_url: str, request_headers):
         request_payload = {**payload, "model": model_name}
         async with session.post(
-            request_url, headers=request_headers, json=request_payload
+                request_url, headers=request_headers, json=request_payload
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
@@ -143,9 +142,17 @@ async def call_llm(
 
     async with aiohttp.ClientSession() as session:
         for attempt in range(max_retries):
-            content, last_error, status = await request_once(
-                session, model, url, headers
-            )
+            try:
+                content, last_error, status = await request_once(
+                    session, model, url, headers
+                )
+            except (asyncio.TimeoutError, aiohttp.ClientError) as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    print(f"⚠️ LLM API错误{type(e).__name__}: {e} | 第{attempt + 1}次重试")
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                break
             if content is not None:
                 return content
             if status in RETRYABLE_STATUS_CODES and attempt < max_retries - 1:
@@ -351,7 +358,7 @@ def _split_entries_for_batch(
 
 
 def _reconcile_batch_results(
-    entries: List[Dict], results: List[Dict], batch_index: int
+        entries: List[Dict], results: List[Dict], batch_index: int
 ) -> Tuple[List[Dict], List[str]]:
     """对单批评分结果按 link 过滤，保留可回收结果"""
     entry_links = {entry.get("link") for entry in entries if entry.get("link")}
@@ -379,8 +386,8 @@ def _reconcile_batch_results(
 
 
 async def _score_single_batch(
-    entries: List[Dict], config: LLMConfig, batch_index: int = 0
-) -> List[Dict]:
+        entries: List[Dict], config: LLMConfig, batch_index: int = 0
+) -> Optional[List[Dict]]:
     """对单批entries进行评分"""
     # 从config获取批量评分提示词路径
 
@@ -398,23 +405,25 @@ async def _score_single_batch(
         return results
 
     except Exception as e:
-        error_message = f"批次{batch_index + 1} 评分失败: {e}"
+        error_message = f"批次{batch_index + 1} 评分失败: {type(e).__name__}: {e}"
         print(f"⚠️ {error_message}")
-        return []
+        return None
 
 
-async def score_batch(entries: List[Dict]) -> List[Dict]:
+async def score_batch(entries: List[Dict]) -> Tuple[List[Dict], List[str]]:
     """
     批量评分 - 智能分批处理
 
     根据数据量自动决定分批策略：
     - 小批量：一次性发送
     - 大批量：分成多个批次并行处理
+
+    返回评分结果与成功批次中未入选的链接；失败批次不计入被拒。
     """
     config = get_config().llm
 
     if not entries:
-        return []
+        return [], []
 
     # 获取分批配置
     max_prompt_chars = config.max_prompt_chars
@@ -424,11 +433,6 @@ async def score_batch(entries: List[Dict]) -> List[Dict]:
     batches = _split_entries_for_batch(entries, max_prompt_chars, prompt_chars)
     print(f"📦 分成 {len(batches)} 个批次评分 (共 {len(entries)} 条)")
 
-    # 如果只有一批，直接处理
-    if len(batches) == 1:
-        scores = await _score_single_batch(batches[0], config, batch_index=0)
-        return _merge_scores(entries, scores)
-
     # 多批并行处理（限制并发数）
     semaphore = asyncio.Semaphore(max_concurrent_batches)
 
@@ -436,22 +440,26 @@ async def score_batch(entries: List[Dict]) -> List[Dict]:
         async with semaphore:
             return await _score_single_batch(batch, config, batch_index=batch_index)
 
-    # 并发处理所有批次
-    batch_tasks = [
+    batch_results = await asyncio.gather(*(
         score_with_limit(batch_index, batch)
         for batch_index, batch in enumerate(batches)
-    ]
-    batch_results = await asyncio.gather(*batch_tasks)
+    ))
 
-    # 合并所有评分结果
     all_scores = []
-    for scores in batch_results:
+    # 评分失败的新闻id
+    failure_ids = set()
+    for batch, scores in zip(batches, batch_results):
+        if scores is None:
+            failure_ids.update(entry["id"] for entry in batch)
+            continue
         all_scores.extend(scores)
 
-    return _merge_scores(entries, all_scores)
+    return _merge_scores(entries, all_scores, failure_ids)
 
 
-def _merge_scores(entries: List[Dict], scores: List[Dict]) -> List[Dict]:
+def _merge_scores(
+        entries: List[Dict], scores: List[Dict], failure_ids: set[int]
+) -> Tuple[List[Dict], List[str]]:
     """将评分结果合并到原始entries中"""
     # 构建 id:score 映射
     score_map = {
@@ -463,6 +471,8 @@ def _merge_scores(entries: List[Dict], scores: List[Dict]) -> List[Dict]:
     merged = []
     exclude_link = []
     for index, entry in enumerate(entries):
+        if index in failure_ids:
+            continue
         link = entry.get("link")
         score_data = score_map.get(index)
         if not score_data:
@@ -488,7 +498,7 @@ def _merge_scores(entries: List[Dict], scores: List[Dict]) -> List[Dict]:
     if exclude_link:
         print(f"🧹 评分过滤链接共 {len(exclude_link)} 条 | 无效 id : {len(scores) - len(score_map)} 条 : ")
         print("\n".join(exclude_link))
-    return merged
+    return merged, exclude_link
 
 
 def _get_push_prompt_entries(entries: List[Dict]) -> List[Dict]:
@@ -507,9 +517,9 @@ def _get_push_prompt_entries(entries: List[Dict]) -> List[Dict]:
 
 
 async def generate_immediate_push(
-    entries: List[Dict],
-    recent_push_context: str = "",
-    domain: str = None,
+        entries: List[Dict],
+        recent_push_context: str = "",
+        domain: str = None,
 ) -> Tuple[str, Optional[str]]:
     """生成即时推送内容
 
@@ -536,16 +546,16 @@ async def generate_immediate_push(
 
         return await call_llm(prompt, ModelTier.LOW), None
     except Exception as e:
-        error_message = f"生成即时推送失败: {e}"
+        error_message = f"生成即时推送失败: {type(e).__name__}: {e}"
         print(f"⚠️ {error_message}")
         return "", error_message
 
 
 async def compose_digest(
-    entries: List[Dict],
-    context: List[Dict],
-    recent_push_context: str = "",
-    domain: str = None,
+        entries: List[Dict],
+        context: List[Dict],
+        recent_push_context: str = "",
+        domain: str = None,
 ) -> str:
     """生成定时汇总推送内容
 

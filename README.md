@@ -67,6 +67,11 @@ GMAIL_TO=receiver@example.com
 当前配置示例：
 
 ```yaml
+dedupe:
+  fuzzy_enabled: false
+  content_threshold: 90
+  rejected_ttl_hours: 24    # 被拒链接在进程内存中的有效期，正整数小时
+
 llm:
   provider: openai
   models:                  # 档位 -> 模型名，三档必须齐全
@@ -79,7 +84,7 @@ llm:
     apiKeyName: OPENROUTER_API_KEY
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
-  max_prompt_chars: 64000
+  max_prompt_chars: 30000
   digest_max_input_tokens: 450000
   max_concurrent_batches: 3
   max_retries: 3
@@ -151,6 +156,8 @@ docker compose up -d --build
 
 `sources.sync` 会把多个远端 OPML 合并去重后写入 `resources/rss.opml`。启用后，程序启动时会先同步一次，并继续按 `sync.cron` 定时同步。只有所有远端 OPML 都成功解析时才会替换现有文件；如果同步失败，抓取流程继续使用已有 OPML。`sources.add`、`sources.block` 和 `sources.block_domains` 仍会在生成后的 OPML 之上继续生效。
 
+当前 `sources.block` 还屏蔽 `http://engineering.khanacademy.org/rss` 和 `https://browser.engineering/rss.xml`，按 OPML 中的 `xmlUrl` 精确匹配，避免发布日期无效或缺失的旧条目反复进入评分。
+
 ### filter - 内容过滤
 
 | 字段 | 类型 | 说明 |
@@ -161,6 +168,16 @@ docker compose up -d --build
 | `keep_days` | number | `news-data/` 旧文件保留天数 |
 | `push_context_days` | number | 定时汇总读取历史推送标题的天数 |
 | `no_content_marker` | string | LLM 判定无新内容时返回的标记 |
+
+### dedupe - 去重配置
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `fuzzy_enabled` | boolean | 是否启用内容模糊去重 |
+| `content_threshold` | number | 模糊去重相似度阈值，范围 `0-100` |
+| `rejected_ttl_hours` | PositiveInt | 必填的被拒链接有效期，单位小时；当前配置为 `24`，缺失或非正整数会校验失败 |
+
+评分成功批次中未返回结果的条目，以及评分结果的 domain 未配置的条目，其链接会在评分完成时记为被拒；评分失败批次和已入库条目不记录。有效期内的被拒链接在去重前跳过，不评分也不入库，跳过数与精确、模糊去重分开记录。距被拒时间达到或超过有效期时删除记录，重新评分后再次被拒会刷新时间。记录仅保存在进程内存中，重启后清空，不改变 fetch 文件结构。
 
 ### schedule - 调度配置
 
@@ -199,12 +216,14 @@ cron 格式：`minute hour day month weekday`。
 | `fallback.apiKeyName` | string | 兜底 API Key 所在环境变量名 |
 | `baseUrl` | string | OpenAI 兼容接口地址，不包含 `/chat/completions` |
 | `apiKeyName` | string | API Key 所在环境变量名 |
-| `max_prompt_chars` | number | 单个批次 prompt 最大字符数 |
+| `max_prompt_chars` | number | 单个评分批次 prompt 最大字符数；当前配置为 `30000` |
 | `max_concurrent_batches` | number | 批量评分最大并发批次数 |
-| `max_retries` | number | LLM 请求失败后的最大重试次数 |
+| `max_retries` | number | 主模型请求的总尝试次数，包含首次请求 |
 | `startup_timeout_seconds` | number | 启动 LLM 可用性检查超时时间，单位秒 |
 | `prompts.score_batch` | string | 批量评分 prompt 路径 |
 | `prompts.domains` | mapping | 所有声明的领域均启用；映射声明顺序决定处理和推送顺序，每项配置评分、汇总和即时推送 prompt 路径 |
+
+主模型发生 `asyncio.TimeoutError` 或 `aiohttp.ClientError` 时，沿用可重试 HTTP 状态码的 `max_retries` 与指数退避策略；尝试耗尽后，允许兜底且配置了 `llm.fallback` 时请求该端点一次。兜底超时或网络异常不会重试；`401`、`404` 等不可重试状态码仍直接结束主模型尝试。评分、即时快讯和汇总的失败文本统一为 `异常类型名: 消息`，即时快讯和汇总的异常通知复用日志中的错误文本。
 
 ### push - 推送平台配置
 

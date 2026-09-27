@@ -47,6 +47,9 @@ from src.storage import (
     save_push_file,
 )
 
+_rejected_links: Dict[str, datetime] = {}
+
+
 def is_immediate_push_forbidden() -> bool:
     config = get_config()
     curr_time = now_local().time()
@@ -183,6 +186,12 @@ def collect_entries_for_domain_pushes(data_dir: str = "news-data") -> Dict[str, 
 
 async def run_fetch_job():
     config = get_config()
+    now = datetime.now(timezone.utc)
+    rejected_ttl = timedelta(hours=config.dedupe.rejected_ttl_hours)
+    for link, rejected_at in list(_rejected_links.items()):
+        if now - rejected_at >= rejected_ttl:
+            del _rejected_links[link]
+
     print(f"\n{'=' * 50}")
     print(f"🔄 Fetch Job | {now_local().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 50}")
@@ -218,6 +227,7 @@ async def run_fetch_job():
     content_threshold = config.dedupe.content_threshold
 
     existing_count = len(existing_keys)
+    rejected_skip_count = 0
     exact_duplicate_count = 0
     rapidfuzz_duplicate_pair: list[dict[str, str]] = []
 
@@ -225,6 +235,9 @@ async def run_fetch_job():
 
     for entry in entries:
         if not entry.get("link"):
+            continue
+        if entry["link"] in _rejected_links:
+            rejected_skip_count += 1
             continue
         if is_duplicate_entry(entry, existing_keys):
             exact_duplicate_count += 1
@@ -237,6 +250,7 @@ async def run_fetch_job():
 
     print(
         f"🆕 新消息 {len(new_entries)} 条 | "
+        f"被拒跳过：{rejected_skip_count} 条 | "
         f"精确去重：{exact_duplicate_count} 条 | "
         f"模糊去重：{len(rapidfuzz_duplicate_pair)} 条 | "
         f"历史条目：{existing_count}"
@@ -256,11 +270,13 @@ async def run_fetch_job():
                 entry["published"].astimezone(get_timezone()).isoformat()
             )
 
-    scored = await score_batch(new_entries)
+    scored, rejected_links = await score_batch(new_entries)
+    scored_at = datetime.now(timezone.utc)
 
     # 仅保留已声明领域的评分结果。
     configured_domains = set(config.llm.prompts.domains)
     scored = [entry for entry in scored if entry["domain"] in configured_domains]
+    _rejected_links.update({link: scored_at for link in rejected_links})
 
     is_new_file = not os.path.exists(fetch_file)
     if is_new_file:
@@ -384,8 +400,9 @@ async def run_push_job():
                 domain=domain,
             )
         except Exception as e:
-            print(f"[{domain}] 生成汇总推送失败: {e}")
-            await notify_llm_errors(f"compose_digest:{domain}", [str(e)])
+            error_message = f"{type(e).__name__}: {e}"
+            print(f"[{domain}] 生成汇总推送失败: {error_message}")
+            await notify_llm_errors(f"compose_digest:{domain}", [error_message])
             continue
 
         if not push_content.strip():

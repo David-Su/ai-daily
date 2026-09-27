@@ -22,6 +22,8 @@ dedupe:
   fuzzy_enabled: false
   # 模糊去重相似度阈值
   content_threshold: 90
+  # 被拒链接在内存中的有效期（小时）
+  rejected_ttl_hours: 24
 
 # 调度
 schedule:
@@ -62,7 +64,7 @@ llm:
   # API Key 对应的环境变量名
   apiKeyName: OPENROUTER_API_KEY
   # 单次评分 prompt 字符上限
-  max_prompt_chars: 64000
+  max_prompt_chars: 100000
   # digest 输入 token 上限
   digest_max_input_tokens: 500000
   max_concurrent_batches: 3
@@ -142,6 +144,8 @@ sources:
   block:
     - xmlUrl: https://dev.to/feed
     - xmlUrl: https://github.com/openclaw/openclaw/commits/main.atom
+    - xmlUrl: http://engineering.khanacademy.org/rss
+    - xmlUrl: https://browser.engineering/rss.xml
   # 按域名屏蔽，支持 *.example.com
   block_domains:
     # arxiv 偏科研，暂时屏蔽掉

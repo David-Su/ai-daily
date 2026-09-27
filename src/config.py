@@ -85,6 +85,7 @@ class DedupeConfig(ConfigModel):
 
     fuzzy_enabled: bool
     content_threshold: Score
+    rejected_ttl_hours: PositiveInt
 
 
 class ScheduleConfig(ConfigModel):

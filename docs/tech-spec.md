@@ -79,13 +79,15 @@ await asyncio.gather(fetch_loop(), push_loop())
 
 `run_fetch_job()`：
 
-1. 根据 `fetch_interval_minutes` 和 `fetch_lookback_minutes` 计算 UTC 抓取窗口。
+1. 每轮开始移除距被拒时间达到或超过 `dedupe.rejected_ttl_hours` 的内存记录，并根据 `fetch_interval_minutes` 和 `fetch_lookback_minutes` 计算 UTC 抓取窗口。
 2. 合并 OPML 与自定义源，应用 `block` 和 `block_domains`。
 3. 并发抓取 RSS，转换 HTML 为 Markdown。
-4. 基于近期已保存链接去重。
-5. 调用 `score_batch()` 分领域批量评分。
-6. 保存到 `news-data/fetch-YYYY-MM-DD.json`。
+4. 在精确、模糊去重前跳过有效期内的被拒链接；去重日志分别统计被拒跳过、精确去重和模糊去重数。
+5. 调用 `score_batch()` 分领域批量评分，取得 `(scored, rejected_links)`。
+6. 过滤未配置 domain 的评分结果，将这些链接并入被拒记录，以本轮评分完成的 UTC 时间记录；其余结果保存到 `news-data/fetch-YYYY-MM-DD.json`。
 7. 对达到 `hot_threshold` 的条目按 domain 生成即时快讯，推送并追加到 `notify/<domain>/notify-YYYY-MM-DD.md`。
+
+被拒记录使用模块级 `_rejected_links` 字典，仅保存链接与被拒时间；评分失败批次和已入库条目不记录。过期链接再次评分后仍被拒时，时间刷新为本轮评分完成时间。进程重启后记录清空，第一轮对抓取到的新条目照常评分；记录不写入 fetch 或其他本地文件，fetch 文件结构不变。`fetch_loop()` 串行执行抓取任务，无需为该字典加锁。
 
 `run_push_job()`：
 
@@ -161,9 +163,12 @@ payload = {
 - 从 `apiKeyName` 指定的环境变量读取密钥。
 - 必填 `tier` 参数（`ModelTier` 枚举）决定使用哪一档模型，无默认值；调用点必须显式声明档位。
 - 通过可选 `response_format` 透传 OpenAI 兼容 JSON mode 等结构化输出配置。
-- `max_retries` 控制主模型重试次数。
-- 对可重试状态码做指数退避重试；`404` 等不可重试错误立刻结束主模型这一轮。
-- `allow_fallback` 默认开启。主模型按既有策略失败后，若配置了 `llm.fallback`，再用该端点的 `baseUrl` / API Key / `model` 请求恰好一次；成功则打日志（档位、两边型号、两边地址），失败则抛与原先相同的错误。主模型缺 Key 仍在入口失败且不打兜底；兜底缺 Key 在发出该次请求前以同样方式失败。启动探测传入 `allow_fallback=False`。
+- `max_retries` 控制主模型的总尝试次数，包含首次请求；重试始终使用同一主模型。
+- 主模型的 `asyncio.TimeoutError` 与 `aiohttp.ClientError`（包括 `aiohttp.ServerTimeoutError`）和可重试 HTTP 状态码使用相同的指数退避策略。异常触发的重试日志包含异常类型名和当前重试序号，状态码触发的日志沿用原格式；退避间隔和 `max_retries` 配置不变。
+- `401`、`404` 等不可重试状态码立刻结束主模型尝试；其他异常（例如响应缺少 `choices` 引起的 `KeyError`）直接抛出，不进入超时与网络重试路径。请求未设置额外超时时长，沿用 aiohttp `ClientSession` 默认总超时 300 秒。
+- `allow_fallback` 默认开启。主模型按上述策略失败后，若配置了 `llm.fallback`，再用该端点的 `baseUrl` / API Key / `model` 请求恰好一次；成功则打日志（档位、两边型号、两边地址）。兜底超时或网络异常直接抛出该次异常，不对兜底重试；未配置或未允许兜底时，主模型持续超时或网络异常会抛出最后一次尝试的原异常。主模型缺 Key 仍在入口失败且不打兜底；兜底缺 Key 在发出该次请求前以同样方式失败。启动探测传入 `allow_fallback=False`。
+
+**失败日志与通知**：评分批次（`_score_single_batch()`）、即时快讯（`generate_immediate_push()`）和汇总（`run_push_job()`）统一使用 `异常类型名: 消息`，即 `{type(e).__name__}: {e}`。异常消息为空时仍包含类型名（例如 `TimeoutError: `）；评分 JSON 解析失败包含 `ValueError` 及原解析错误消息。即时快讯返回的 `error_message` 和汇总异常通知复用相同的错误文本，与日志一致。
 
 **用量日志**：每个 HTTP 200 且响应 JSON 解析成功的请求，在读取正文前向标准输出打印一条日志，不创建或追加本地 usage 文件：
 
@@ -198,15 +203,16 @@ LLM usage | tier=low | model=<实际请求模型> | usage={"prompt_tokens":100,"
 
 `check_llm_available()` 在启动时并发探测全部三档主模型，沿用 `startup_timeout_seconds` 作为单档超时，探测关闭兜底。探测响应按上述规则输出用量日志，三档均成功时返回（无返回值）；任一档失败或超时即抛错中断启动，错误信息包含失败档位名与原因，多档失败时列出全部失败档位。已配置 `fallback` 也不能把失败的档标为可用。
 
-`score_batch(entries, config)`：
+`score_batch(entries)`：
 
 1. 读取 `prompts.score_batch`。
 2. 从 `prompts.domains` 的键构建有序的可选领域列表。
 3. 读取启用 domain 的 `score_standard`，拼进评分 prompt。
-4. 根据 `max_prompt_chars` 自动分批。
+4. 根据 `max_prompt_chars` 自动分批，当前配置为 30000 字符。
 5. 使用 `max_concurrent_batches` 控制并发。
-6. 评分调用传入 `response_format={"type": "json_object"}`，优先解析 `{"items": [...]}`，并兼容旧式顶层 JSON 数组。
-7. 当返回数量异常时，保留可按 `link` 匹配的结果，同时返回错误列表。
+6. 评分调用传入 `response_format={"type": "json_object"}`；prompt 要求单行、无缩进、无换行的 JSON 对象且不含其他文字，字段顺序为 `id`、`domain`、`score`、`tags`、`summary`，仅声明一次 JSON 输出要求。解析优先接受 `{"items": [...]}`，并兼容缩进、换行输出及旧式顶层 JSON 数组，字段含义不变。
+7. `_score_single_batch()` 成功时返回结果列表（可为空），失败时返回 `None`；仅合并成功批次中的可匹配结果，并把这些批次里模型未返回结果的条目链接记为被拒。
+8. 返回 `(scored, rejected_links)`，失败批次不产生被拒链接；“评分过滤链接”日志只统计成功批次。调用方再追加未配置 domain 的链接，并记录被拒时间。
 
 `generate_immediate_push()`：
 
@@ -302,6 +308,7 @@ platforms = {
 - 除 `llm.fallback` 外，所有字段都是必填，代码中不设默认值，配置里缺什么就报什么。
 - 禁止未知字段（`extra="forbid"`），拼错的键名会直接报错而不是被忽略。
 - 值域约束：分数类字段限定 `0-100`，时长与并发类字段必须大于 0，`timezone_hours` 限定 `-12` 到 `14`。
+- `dedupe.rejected_ttl_hours` 是必填 `PositiveInt`，单位为小时，缺失或非正整数会校验失败；代码不设默认值，当前部署配置写为 `24`。
 - 语义约束：`hot_threshold` 不得低于 `min_score`；`push_cron` 与 `sources.sync.cron` 必须是合法 cron；`hot_push_block_periods` 每段起始时间必须早于结束时间；`llm.baseUrl`、`llm.fallback.baseUrl`、`sources.add[].xmlUrl`、`sources.sync.urls` 必须是 http/https URL；`llm.models` 必须齐备 `low`、`medium`、`high` 三档且模型名非空；`llm.fallback` 可选，写了就必须含非空的 `model`、`baseUrl`、`apiKeyName`，且不进 `models` 字典；`prompts.domains` 必须至少声明一个领域，且每个领域必须配好三类 prompt；`sources.sync.enabled=true` 时 `urls` 不能为空。
 - 初始化时还会解析相对路径并检查 prompt 与 `base_opml` 文件可读，避免进入循环后才失败。
 
@@ -321,6 +328,7 @@ filter:
 dedupe:
   fuzzy_enabled: false
   content_threshold: 90
+  rejected_ttl_hours: 24   # 被拒链接的内存记录有效期，正整数小时
 
 schedule:
   fetch_interval_minutes: 120
@@ -346,7 +354,7 @@ llm:
     apiKeyName: OPENROUTER_API_KEY
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
-  max_prompt_chars: 64000
+  max_prompt_chars: 30000
   digest_max_input_tokens: 450000
   max_concurrent_batches: 3
   max_retries: 3
@@ -392,9 +400,13 @@ sources:
       category: AI
   block:                # 按 xmlUrl 屏蔽
     - xmlUrl: https://dev.to/feed
+    - xmlUrl: http://engineering.khanacademy.org/rss
+    - xmlUrl: https://browser.engineering/rss.xml
   block_domains:        # 按域名屏蔽，支持 *.example.com
     - "*.youtube.com"
 ```
+
+`sources.block` 按 RSS 的 `xmlUrl` 精确匹配。新增的 `http://engineering.khanacademy.org/rss` 和 `https://browser.engineering/rss.xml` 与 `resources/rss.opml` 中的地址完全一致，用于屏蔽发布日期无效或缺失、导致旧条目重复评分的两个源。
 
 ### 环境变量
 
