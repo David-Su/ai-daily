@@ -135,6 +135,10 @@ async def call_llm(
                 text = await resp.text()
                 return None, generate_error(f"{resp.status} - {text}"), resp.status
             data = await resp.json()
+            print(
+                f"📊 LLM usage | tier={tier.value} | model={model_name} | "
+                f"usage={compact_json(data.get('usage'))}"
+            )
             return data["choices"][0]["message"]["content"], None, resp.status
 
     async with aiohttp.ClientSession() as session:

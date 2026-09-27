@@ -566,6 +566,95 @@ def _distinct_tier_models():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "usage_fields, expected_usage",
+    [
+        ({}, "null"),
+        ({"usage": None}, "null"),
+        ({"usage": {"prompt_tokens": 0}}, '{"prompt_tokens":0}'),
+        (
+            {"usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 5,
+                "total_tokens": 25,
+                "prompt_tokens_details": {"cached_tokens": 10},
+                "completion_tokens_details": {"reasoning_tokens": 2},
+                "provider_note": "line1\nline2",
+            }},
+            '{"prompt_tokens":20,"completion_tokens":5,"total_tokens":25,'
+            '"prompt_tokens_details":{"cached_tokens":10},'
+            '"completion_tokens_details":{"reasoning_tokens":2},'
+            '"provider_note":"line1\\nline2"}',
+        ),
+    ],
+    ids=["missing", "null", "zero", "nested-details"],
+)
+async def test_call_llm_logs_usage(monkeypatch, capsys, usage_fields, expected_usage):
+    import src.llm as llm_module
+
+    content = "  private response\nwith whitespace  "
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(200, {"choices": [{"message": {"content": content}}], **usage_fields})],
+        models=_distinct_tier_models(),
+    )
+
+    result = await llm_module.call_llm("private prompt", ModelTier.MEDIUM)
+
+    assert result == content
+    assert capsys.readouterr().out.splitlines() == [
+        f"LLM usage | tier=medium | model=medium-model | usage={expected_usage}"
+    ]
+    assert len(requests) == 1
+    assert requests[0][1]["json"] == {
+        "model": "medium-model",
+        "messages": [{"role": "user", "content": "private prompt"}],
+        "temperature": 0.3,
+    }
+
+
+@pytest.mark.asyncio
+async def test_check_llm_available_logs_usage_for_all_tiers(monkeypatch, capsys):
+    _install_llm_http(
+        monkeypatch,
+        lambda model: (200, {
+            "choices": [{"message": {"content": "OK"}}],
+            "usage": {"total_tokens": 3},
+        }),
+        models=_distinct_tier_models(),
+    )
+
+    await check_llm_available()
+
+    assert set(capsys.readouterr().out.splitlines()) == {
+        'LLM usage | tier=low | model=low-model | usage={"total_tokens":3}',
+        'LLM usage | tier=medium | model=medium-model | usage={"total_tokens":3}',
+        'LLM usage | tier=high | model=high-model | usage={"total_tokens":3}',
+    }
+
+
+@pytest.mark.asyncio
+async def test_score_failure_keeps_usage_log(monkeypatch, capsys):
+    import src.llm as llm_module
+
+    _, custom_llm = _install_llm_http(
+        monkeypatch,
+        [(200, {
+            "choices": [{"message": {"content": "invalid score JSON"}}],
+            "usage": {"total_tokens": 25},
+        })],
+        models=_distinct_tier_models(),
+    )
+
+    assert await llm_module._score_single_batch([], custom_llm) == []
+
+    log = capsys.readouterr().out
+    usage_line = 'LLM usage | tier=low | model=low-model | usage={"total_tokens":25}'
+    assert log.count(usage_line) == 1
+    assert log.index(usage_line) < log.index("评分失败")
+
+
+@pytest.mark.asyncio
 async def test_call_llm_skips_fallback_when_primary_succeeds(monkeypatch, capsys):
     import src.llm as llm_module
 
@@ -593,7 +682,10 @@ async def test_call_llm_falls_back_once_after_retryable_exhausted(monkeypatch, c
 
     requests, custom_llm = _install_llm_http(
         monkeypatch,
-        [(500, "boom"), (500, "boom"), (200, "fallback ok")],
+        [(500, "boom"), (500, "boom"), (200, {
+            "choices": [{"message": {"content": "fallback ok"}}],
+            "usage": {"total_tokens": 7},
+        })],
         models=_distinct_tier_models(),
         fallback=_fallback_endpoint(),
         max_retries=2,
@@ -614,6 +706,9 @@ async def test_call_llm_falls_back_once_after_retryable_exhausted(monkeypatch, c
     assert "medium" in log and "medium-model" in log and "backup-model" in log
     assert "https://example.com/v1" in log
     assert "https://fallback.example.com/v1" in log
+    assert [line for line in log.splitlines() if line.startswith("LLM usage")] == [
+        'LLM usage | tier=medium | model=backup-model | usage={"total_tokens":7}'
+    ]
 
 
 @pytest.mark.asyncio
@@ -637,7 +732,7 @@ async def test_call_llm_falls_back_immediately_on_non_retryable(monkeypatch, sta
 
 
 @pytest.mark.asyncio
-async def test_call_llm_does_not_retry_failed_fallback(monkeypatch):
+async def test_call_llm_does_not_retry_failed_fallback(monkeypatch, capsys):
     import src.llm as llm_module
 
     requests, _ = _install_llm_http(
@@ -653,6 +748,7 @@ async def test_call_llm_does_not_retry_failed_fallback(monkeypatch):
 
     sent_models = [kwargs["json"]["model"] for _, kwargs in requests]
     assert sent_models == ["medium-model", "backup-model"]
+    assert "LLM usage" not in capsys.readouterr().out
 
 
 @pytest.mark.asyncio
