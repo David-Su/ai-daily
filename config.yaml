@@ -64,7 +64,7 @@ llm:
   # API Key 对应的环境变量名
   apiKeyName: OPENROUTER_API_KEY
   # 单次评分 prompt 字符上限
-  max_prompt_chars: 100000
+  max_prompt_chars: 40000
   # digest 输入 token 上限
   digest_max_input_tokens: 500000
   max_concurrent_batches: 3

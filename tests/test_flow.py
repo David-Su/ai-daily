@@ -667,6 +667,33 @@ async def test_score_failure_keeps_usage_log(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tier, expected_effort",
+    [(ModelTier.LOW, "low"), (ModelTier.MEDIUM, None), (ModelTier.HIGH, None)],
+)
+async def test_call_llm_sets_reasoning_effort_only_for_low_tier(
+        monkeypatch, tier, expected_effort
+):
+    """low 档主模型和兜底都传 reasoning_effort=low，其他档位不传。"""
+    import src.llm as llm_module
+
+    requests, _ = _install_llm_http(
+        monkeypatch,
+        [(503, "busy"), (200, "fallback ok")],
+        models=_distinct_tier_models(),
+        fallback=_fallback_endpoint(),
+        max_retries=1,
+    )
+
+    assert await llm_module.call_llm("test", tier) == "fallback ok"
+    assert len(requests) == 2
+    assert all(
+        kwargs["json"].get("reasoning_effort") == expected_effort
+        for _, kwargs in requests
+    )
+
+
+@pytest.mark.asyncio
 async def test_call_llm_skips_fallback_when_primary_succeeds(monkeypatch, capsys):
     import src.llm as llm_module
 

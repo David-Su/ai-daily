@@ -163,6 +163,7 @@ payload = {
 - 从 `apiKeyName` 指定的环境变量读取密钥。
 - 必填 `tier` 参数（`ModelTier` 枚举）决定使用哪一档模型，无默认值；调用点必须显式声明档位。
 - 通过可选 `response_format` 透传 OpenAI 兼容 JSON mode 等结构化输出配置。
+- 推理强度在 `call_llm()` 中硬编码，不进配置：`low` 档请求带 `"reasoning_effort": "low"`（主模型与兜底一致），`medium` / `high` 档不传该参数，沿用模型默认。
 - `max_retries` 控制主模型的总尝试次数，包含首次请求；重试始终使用同一主模型。
 - 主模型的 `asyncio.TimeoutError` 与 `aiohttp.ClientError`（包括 `aiohttp.ServerTimeoutError`）和可重试 HTTP 状态码使用相同的指数退避策略。异常触发的重试日志包含异常类型名和当前重试序号，状态码触发的日志沿用原格式；退避间隔和 `max_retries` 配置不变。
 - `401`、`404` 等不可重试状态码立刻结束主模型尝试；其他异常（例如响应缺少 `choices` 引起的 `KeyError`）直接抛出，不进入超时与网络重试路径。请求未设置额外超时时长，沿用 aiohttp `ClientSession` 默认总超时 300 秒。
@@ -208,7 +209,7 @@ LLM usage | tier=low | model=<实际请求模型> | usage={"prompt_tokens":100,"
 1. 读取 `prompts.score_batch`。
 2. 从 `prompts.domains` 的键构建有序的可选领域列表。
 3. 读取启用 domain 的 `score_standard`，拼进评分 prompt。
-4. 根据 `max_prompt_chars` 自动分批，当前配置为 30000 字符。
+4. 根据 `max_prompt_chars` 自动分批，当前配置为 40000 字符。
 5. 使用 `max_concurrent_batches` 控制并发。
 6. 评分调用传入 `response_format={"type": "json_object"}`；prompt 要求单行、无缩进、无换行的 JSON 对象且不含其他文字，字段顺序为 `id`、`domain`、`score`、`tags`、`summary`，仅声明一次 JSON 输出要求。解析优先接受 `{"items": [...]}`，并兼容缩进、换行输出及旧式顶层 JSON 数组，字段含义不变。
 7. `_score_single_batch()` 成功时返回结果列表（可为空），失败时返回 `None`；仅合并成功批次中的可匹配结果，并把这些批次里模型未返回结果的条目链接记为被拒。
@@ -354,7 +355,7 @@ llm:
     apiKeyName: OPENROUTER_API_KEY
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
-  max_prompt_chars: 30000
+  max_prompt_chars: 40000
   digest_max_input_tokens: 450000
   max_concurrent_batches: 3
   max_retries: 3

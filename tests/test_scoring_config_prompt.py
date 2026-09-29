@@ -72,7 +72,7 @@ def test_load_config_rejects_invalid_rejected_ttl_hours(
 
 def test_real_config_loads_scoring_limits(initialized_config):
     assert initialized_config.dedupe.rejected_ttl_hours == 24
-    assert initialized_config.llm.max_prompt_chars == 30000
+    assert initialized_config.llm.max_prompt_chars == 40000
 
 
 def test_rendered_score_prompt_has_compact_ordered_json_example(initialized_config):

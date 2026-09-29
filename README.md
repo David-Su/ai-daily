@@ -84,7 +84,7 @@ llm:
     apiKeyName: OPENROUTER_API_KEY
   baseUrl: https://www.rightapi.ai/codex/v1
   apiKeyName: RIGHT_CODE_API_KEY
-  max_prompt_chars: 30000
+  max_prompt_chars: 40000
   digest_max_input_tokens: 450000
   max_concurrent_batches: 3
   max_retries: 3
@@ -216,7 +216,7 @@ cron 格式：`minute hour day month weekday`。
 | `fallback.apiKeyName` | string | 兜底 API Key 所在环境变量名 |
 | `baseUrl` | string | OpenAI 兼容接口地址，不包含 `/chat/completions` |
 | `apiKeyName` | string | API Key 所在环境变量名 |
-| `max_prompt_chars` | number | 单个评分批次 prompt 最大字符数；当前配置为 `30000` |
+| `max_prompt_chars` | number | 单个评分批次 prompt 最大字符数；当前配置为 `40000` |
 | `max_concurrent_batches` | number | 批量评分最大并发批次数 |
 | `max_retries` | number | 主模型请求的总尝试次数，包含首次请求 |
 | `startup_timeout_seconds` | number | 启动 LLM 可用性检查超时时间，单位秒 |
