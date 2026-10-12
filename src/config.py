@@ -131,6 +131,7 @@ class FetchConfig(ConfigModel):
 class DomainPromptConfig(ConfigModel):
     """单个 domain 的 prompt 路径"""
 
+    domain_standard: NonEmptyStr
     score_standard: NonEmptyStr
     digest: NonEmptyStr
     immediate_push: NonEmptyStr
@@ -367,12 +368,12 @@ def _resolve_path(value: str, config_dir: Path) -> Path:
 
 def _validate_local_resources(config: AppConfig, config_dir: Path) -> AppConfig:
     """解析并检查配置引用的本地文件，避免启动后才发现路径错误。"""
+    prompt_fields = tuple(DomainPromptConfig.model_fields)
     prompt_domains = {
         key: item.model_copy(
             update={
-                "score_standard": str(_resolve_path(item.score_standard, config_dir)),
-                "digest": str(_resolve_path(item.digest, config_dir)),
-                "immediate_push": str(_resolve_path(item.immediate_push, config_dir)),
+                field_name: str(_resolve_path(getattr(item, field_name), config_dir))
+                for field_name in prompt_fields
             }
         )
         for key, item in config.llm.prompts.domains.items()
@@ -394,7 +395,7 @@ def _validate_local_resources(config: AppConfig, config_dir: Path) -> AppConfig:
     paths.extend(
         (f"llm.prompts.domains.{key}.{field_name}", getattr(item, field_name))
         for key, item in resolved.llm.prompts.domains.items()
-        for field_name in ("score_standard", "digest", "immediate_push")
+        for field_name in prompt_fields
     )
     for location, raw_path in paths:
         resource = Path(raw_path)

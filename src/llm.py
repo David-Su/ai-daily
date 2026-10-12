@@ -220,8 +220,9 @@ async def check_llm_available() -> None:
 
 def _build_batch_prompt(config: LLMConfig, entries: List[Dict]) -> str:
     """构建批量评分prompt"""
-    # 构建评分标准
-    score_standard = _build_score_standard(config)
+    # 构建领域归类标准与评分标准
+    domain_standard = _build_domain_sections(config, "domain_standard")
+    score_standard = _build_domain_sections(config, "score_standard")
     # 构建领域列表
     domain_list = _build_domain_list(config)
 
@@ -241,6 +242,7 @@ def _build_batch_prompt(config: LLMConfig, entries: List[Dict]) -> str:
     return load_prompt(
         config.prompts.score_batch,
         entries_json=entries_json,
+        domain_standard=domain_standard,
         score_standard=score_standard,
         domain_list=domain_list,
     )
@@ -250,15 +252,12 @@ def _build_domain_list(config: LLMConfig) -> str:
     return compact_json(list(config.prompts.domains))
 
 
-def _build_score_standard(config: LLMConfig) -> str:
-    """Build enabled domain score standards from prompt files."""
-    standards = []
-
-    for domain, prompts in config.prompts.domains.items():
-        standard_content = load_prompt(prompts.score_standard).strip()
-        standards.append(f"### {domain}\n{standard_content}")
-
-    return "\n".join(standards)
+def _build_domain_sections(config: LLMConfig, field_name: str) -> str:
+    """按 domain 拼接指定 prompt 字段的文件内容。"""
+    return "\n".join(
+        f"### {domain}\n{load_prompt(getattr(prompts, field_name)).strip()}"
+        for domain, prompts in config.prompts.domains.items()
+    )
 
 
 def _parse_score_response(response: str) -> List[Dict]:

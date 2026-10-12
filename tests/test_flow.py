@@ -373,6 +373,7 @@ def test_config_interface_and_prompt_files():
 
     assert list(prompts.domains) == ["AI", "Investment"]
     for domain_config in prompts.domains.values():
+        assert Path(domain_config.domain_standard).exists()
         assert Path(domain_config.score_standard).exists()
         assert Path(domain_config.digest).exists()
         assert Path(domain_config.immediate_push).exists()

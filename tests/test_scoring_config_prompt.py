@@ -88,6 +88,49 @@ def test_rendered_score_prompt_has_compact_ordered_json_example(initialized_conf
     )
 
 
+def test_load_config_requires_domain_standard(tmp_path, caplog):
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["llm"]["prompts"]["domains"]["AI"].pop("domain_standard", None)
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit):
+            load_config(str(path))
+
+    assert "llm.prompts.domains.AI.domain_standard: Field required" in caplog.text
+
+
+def test_missing_domain_standard_file_is_rejected_at_startup(tmp_path, caplog):
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    raw["llm"]["prompts"]["domains"]["AI"]["domain_standard"] = "prompts/missing.md"
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+    config = load_config(str(path))
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(SystemExit):
+            config_module._validate_local_resources(config, ROOT)
+
+    assert "配置引用的文件不存在: llm.prompts.domains.AI.domain_standard" in caplog.text
+
+
+def test_rendered_score_prompt_embeds_each_domain_standard(initialized_config, tmp_path):
+    domains = {}
+    for name, item in initialized_config.llm.prompts.domains.items():
+        standard = tmp_path / f"{name}.md"
+        standard.write_text(f"{name} 领域范围\n", encoding="utf-8")
+        domains[name] = item.model_copy(update={"domain_standard": str(standard)})
+    prompts = initialized_config.llm.prompts.model_copy(update={"domains": domains})
+    llm = initialized_config.llm.model_copy(update={"prompts": prompts})
+
+    prompt = _build_batch_prompt(llm, [{"id": 1}])
+
+    assert "### AI\nAI 领域范围" in prompt
+    assert "### Investment\nInvestment 领域范围" in prompt
+    assert "{domain_standard}" not in prompt
+
+
 def test_rendered_score_prompt_declares_json_only_output_once(initialized_config):
     prompt = _build_batch_prompt(initialized_config.llm, [{"id": 1}])
     instructions = [

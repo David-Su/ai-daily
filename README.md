@@ -92,10 +92,12 @@ llm:
   prompts:
     domains:
       AI:
+        domain_standard: prompts/score/ai/domain_standard.md
         score_standard: prompts/score/ai/score_standard.md
         digest: prompts/digest/ai/digest.md
         immediate_push: prompts/immediate/ai/immediate_push.md
       Investment:
+        domain_standard: prompts/score/investment/domain_standard.md
         score_standard: prompts/score/investment/score_standard.md
         digest: prompts/digest/investment/digest.md
         immediate_push: prompts/immediate/investment/immediate_push.md
@@ -221,7 +223,7 @@ cron 格式：`minute hour day month weekday`。
 | `max_retries` | number | 主模型请求的总尝试次数，包含首次请求 |
 | `startup_timeout_seconds` | number | 启动 LLM 可用性检查超时时间，单位秒 |
 | `prompts.score_batch` | string | 批量评分 prompt 路径 |
-| `prompts.domains` | mapping | 所有声明的领域均启用；映射声明顺序决定处理和推送顺序，每项配置评分、汇总和即时推送 prompt 路径 |
+| `prompts.domains` | mapping | 所有声明的领域均启用；映射声明顺序决定处理和推送顺序，每项配置领域归类、评分、汇总和即时推送 prompt 路径；`domain_standard` 与 `score_standard` 在运行时按领域拼入 `score_batch` |
 
 主模型发生 `asyncio.TimeoutError` 或 `aiohttp.ClientError` 时，沿用可重试 HTTP 状态码的 `max_retries` 与指数退避策略；尝试耗尽后，允许兜底且配置了 `llm.fallback` 时请求该端点一次。兜底超时或网络异常不会重试；`401`、`404` 等不可重试状态码仍直接结束主模型尝试。评分、即时快讯和汇总的失败文本统一为 `异常类型名: 消息`，即时快讯和汇总的异常通知复用日志中的错误文本。
 
@@ -355,10 +357,10 @@ sources:
 
 ### 添加新的领域
 
-1. 在 `prompts/score/<domain>/score_standard.md` 写评分标准。
+1. 在 `prompts/score/<domain>/domain_standard.md` 写领域归类标准，在 `prompts/score/<domain>/score_standard.md` 写评分标准。
 2. 在 `prompts/digest/<domain>/digest.md` 写该领域的汇总 prompt。
 3. 在 `prompts/immediate/<domain>/immediate_push.md` 写该领域的即时推送 prompt。
-4. 在 `config.yaml` 的 `llm.prompts.domains` 增加以领域名为键的映射项，并配置 `score_standard`、`digest`、`immediate_push`。
+4. 在 `config.yaml` 的 `llm.prompts.domains` 增加以领域名为键的映射项，并配置 `domain_standard`、`score_standard`、`digest`、`immediate_push`。
 
 ### 添加新的推送平台
 
@@ -369,7 +371,9 @@ sources:
 ### 修改评分逻辑
 
 - 通用评分输出格式：`prompts/score/score_batch.md`
+- AI 领域归类标准：`prompts/score/ai/domain_standard.md`
 - AI 评分标准：`prompts/score/ai/score_standard.md`
+- 投资领域归类标准：`prompts/score/investment/domain_standard.md`
 - 投资评分标准：`prompts/score/investment/score_standard.md`
 
 ## 常见问题
@@ -425,7 +429,9 @@ ai-daily/
 │   │   └── investment/immediate_push.md
 │   ├── score/
 │   │   ├── score_batch.md
+│   │   ├── ai/domain_standard.md
 │   │   ├── ai/score_standard.md
+│   │   ├── investment/domain_standard.md
 │   │   └── investment/score_standard.md
 │   └── digest/
 │       ├── ai/digest.md
