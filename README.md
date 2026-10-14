@@ -255,7 +255,7 @@ flowchart TD
     B --> C["HTML 转 Markdown"]
     C --> D["LLM 分领域批量评分"]
     D --> E["news-data/fetch-*.json"]
-    D --> F{"score >= hot_threshold?"}
+    D --> F{"已配置 immediate_push 且 score >= hot_threshold?"}
     F -->|是| G["生成即时快讯"]
     G --> H["推送到启用平台"]
     G --> I["news-data/notify/<domain>/notify-*.md"]
