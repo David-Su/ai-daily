@@ -114,9 +114,13 @@ async def call_llm(
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
     }
-    # 评分与即时快讯输出简单，默认推理会产生大量推理 token 并拖慢请求
+
     if tier == ModelTier.LOW:
+        # 评分与即时快讯输出简单，默认推理会产生大量推理 token 并拖慢请求
         payload["reasoning_effort"] = "low"
+    elif tier == ModelTier.MEDIUM:
+        payload["temperature"] = 0.8
+
     if response_format is not None:
         payload["response_format"] = response_format
 
