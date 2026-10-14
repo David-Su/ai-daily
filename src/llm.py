@@ -537,7 +537,7 @@ async def generate_immediate_push(
     config = get_config().llm
     try:
         prompts = config.prompts.domains.get((domain or "").strip())
-        if not prompts:
+        if not prompts or not prompts.immediate_push:
             raise ValueError(f"未配置 domain={domain or ''} 的 immediate_push prompt")
 
         new_entries = _get_push_prompt_entries(entries)

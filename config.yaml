@@ -197,6 +197,12 @@ sources:
     - title: Reddit - Entrepreneur
       xmlUrl: https://www.reddit.com/r/Entrepreneur/.rss
       category: Monetization
+    - title: The SaaS Podcast
+      xmlUrl: https://feeds.transistor.fm/the-saas-podcast-real-lessons-on-growing-profitable-saas
+      category: Monetization
+    - title: MicroConf On Air
+      xmlUrl: https://feeds.castos.com/8vqr
+      category: Monetization
   # 按 xmlUrl 屏蔽单个源
   block:
     - xmlUrl: https://dev.to/feed

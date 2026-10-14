@@ -376,6 +376,8 @@ def test_config_interface_and_prompt_files():
         assert Path(domain_config.domain_standard).exists()
         assert Path(domain_config.score_standard).exists()
         assert Path(domain_config.digest).exists()
+        if domain_config.immediate_push:
+            assert Path(domain_config.immediate_push).exists()
     assert prompts.domains["Monetization"].immediate_push is None
 
 

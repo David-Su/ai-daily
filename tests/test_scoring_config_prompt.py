@@ -175,5 +175,7 @@ def test_monetization_sources_are_merged(initialized_config):
         "https://www.v2ex.com/feed/create.xml",
         "https://levels.io/rss/",
         "https://www.reddit.com/r/SideProject/.rss",
+        "https://feeds.transistor.fm/the-saas-podcast-real-lessons-on-growing-profitable-saas",
+        "https://feeds.castos.com/8vqr",
     } <= urls
-    assert len(urls) == 16
+    assert len(urls) == 18
