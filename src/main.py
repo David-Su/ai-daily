@@ -310,9 +310,7 @@ async def run_fetch_job():
     elif hot_entries:
         hot_entries_by_domain: Dict[str, List[Dict]] = {}
         for entry in hot_entries:
-            domain: str = entry.get("domain")
-            if not domain or domain.strip() == "": continue
-            hot_entries_by_domain.setdefault(domain, []).append(entry)
+            hot_entries_by_domain.setdefault(entry["domain"], []).append(entry)
 
         print(
             f"🔥 发现 {len(hot_entries)} 条热点消息，按 {len(hot_entries_by_domain)} 个 domain 即时推送..."
