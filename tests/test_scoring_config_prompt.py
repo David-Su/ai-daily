@@ -166,3 +166,14 @@ def test_real_source_merge_excludes_dateless_feeds(initialized_config):
     assert BLOCKED_DATELESS_FEEDS.issubset(blocked_urls)
     assert BLOCKED_DATELESS_FEEDS.isdisjoint(merged_urls)
     assert "https://openai.com/news/rss.xml" in merged_urls
+
+
+def test_monetization_sources_are_merged(initialized_config):
+    urls = {feed["xmlUrl"] for feed in merge_sources() if feed["category"] == "Monetization"}
+
+    assert {
+        "https://www.v2ex.com/feed/create.xml",
+        "https://levels.io/rss/",
+        "https://www.reddit.com/r/SideProject/.rss",
+    } <= urls
+    assert len(urls) == 16
