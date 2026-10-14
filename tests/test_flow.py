@@ -371,12 +371,12 @@ def test_config_interface_and_prompt_files():
     prompts = config.llm.prompts
     assert Path(prompts.score_batch).exists()
 
-    assert list(prompts.domains) == ["AI", "Investment"]
+    assert list(prompts.domains) == ["AI", "Investment", "Monetization"]
     for domain_config in prompts.domains.values():
         assert Path(domain_config.domain_standard).exists()
         assert Path(domain_config.score_standard).exists()
         assert Path(domain_config.digest).exists()
-        assert Path(domain_config.immediate_push).exists()
+    assert prompts.domains["Monetization"].immediate_push is None
 
 
 def test_load_config_rejects_incomplete_domain_prompt_mapping(tmp_path, caplog):
@@ -419,8 +419,10 @@ def test_load_config_rejects_legacy_domain_schema(tmp_path, caplog):
 
 
 def test_declared_domain_order_controls_processing_order():
-    assert get_domain_order() == ["AI", "Investment"]
-    assert sort_domains(["Investment", "AI"]) == ["AI", "Investment"]
+    assert get_domain_order() == ["AI", "Investment", "Monetization"]
+    assert sort_domains(["Monetization", "Investment", "AI"]) == [
+        "AI", "Investment", "Monetization"
+    ]
 
 
 @pytest.mark.parametrize(
