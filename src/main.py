@@ -297,7 +297,14 @@ async def run_fetch_job():
 
     hot_threshold = config.filter.hot_threshold
     no_content_marker = config.filter.no_content_marker
-    hot_entries = [e for e in scored if (e.get("score") or 0) >= hot_threshold]
+    immediate_domains = {
+        domain for domain, prompts in config.llm.prompts.domains.items()
+        if prompts.immediate_push
+    }
+    hot_entries = [
+        e for e in scored
+        if (e.get("score") or 0) >= hot_threshold and e.get("domain") in immediate_domains
+    ]
     if hot_entries and is_immediate_push_forbidden():
         print(f"⏰ 当前时间处于即时推送禁止时间段, 跳过即时推送")
     elif hot_entries:

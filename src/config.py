@@ -129,12 +129,12 @@ class FetchConfig(ConfigModel):
 
 
 class DomainPromptConfig(ConfigModel):
-    """单个 domain 的 prompt 路径"""
+    """单个 domain 的 prompt 路径；未配置 immediate_push 的 domain 不走即时推送"""
 
     domain_standard: NonEmptyStr
     score_standard: NonEmptyStr
     digest: NonEmptyStr
-    immediate_push: NonEmptyStr
+    immediate_push: Optional[NonEmptyStr] = None
 
 
 class PromptsConfig(ConfigModel):
@@ -372,8 +372,9 @@ def _validate_local_resources(config: AppConfig, config_dir: Path) -> AppConfig:
     prompt_domains = {
         key: item.model_copy(
             update={
-                field_name: str(_resolve_path(getattr(item, field_name), config_dir))
+                field_name: str(_resolve_path(path, config_dir))
                 for field_name in prompt_fields
+                if (path := getattr(item, field_name))
             }
         )
         for key, item in config.llm.prompts.domains.items()
@@ -393,9 +394,10 @@ def _validate_local_resources(config: AppConfig, config_dir: Path) -> AppConfig:
         ("llm.prompts.score_batch", resolved.llm.prompts.score_batch),
     ]
     paths.extend(
-        (f"llm.prompts.domains.{key}.{field_name}", getattr(item, field_name))
+        (f"llm.prompts.domains.{key}.{field_name}", path)
         for key, item in resolved.llm.prompts.domains.items()
         for field_name in prompt_fields
+        if (path := getattr(item, field_name))
     )
     for location, raw_path in paths:
         resource = Path(raw_path)
