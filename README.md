@@ -7,8 +7,8 @@
 ## 核心功能
 
 - **RSS 聚合**：从 `resources/rss.opml` 和自定义 RSS 源抓取内容，支持源级屏蔽和域名通配符屏蔽。
-- **分领域评分**：LLM 按 `AI`、`Investment` 等启用领域批量评分，并写入 `domain`、`score`、`tags`、`summary`。
-- **即时推送**：达到 `hot_threshold` 的热点内容会立即生成快讯，避免错过高价值信息。
+- **分领域评分**：LLM 按 `AI`、`Investment`、`Monetization` 等启用领域批量评分，并写入 `domain`、`score`、`tags`、`summary`。
+- **即时推送**：配置了 `immediate_push` 的领域，达到 `hot_threshold` 的热点内容会立即生成快讯，避免错过高价值信息。
 - **定时汇总**：按 cron 时间把近期高分内容按 domain 独立生成日报/投资摘要。
 - **多平台推送**：支持 Discord Webhook、飞书机器人和 Gmail SMTP。
 - **本地归档**：抓取、即时推送和汇总推送都会保存在 `news-data/`，方便追溯和查重。
@@ -101,6 +101,10 @@ llm:
         score_standard: prompts/score/investment/score_standard.md
         digest: prompts/digest/investment/digest.md
         immediate_push: prompts/immediate/investment/immediate_push.md
+      Monetization:
+        domain_standard: prompts/score/monetization/domain_standard.md
+        score_standard: prompts/score/monetization/score_standard.md
+        digest: prompts/digest/monetization/digest.md
     score_batch: prompts/score/score_batch.md
 push:
   discord:
@@ -223,7 +227,7 @@ cron 格式：`minute hour day month weekday`。
 | `max_retries` | number | 主模型请求的总尝试次数，包含首次请求 |
 | `startup_timeout_seconds` | number | 启动 LLM 可用性检查超时时间，单位秒 |
 | `prompts.score_batch` | string | 批量评分 prompt 路径 |
-| `prompts.domains` | mapping | 所有声明的领域均启用；映射声明顺序决定处理和推送顺序，每项配置领域归类、评分、汇总和即时推送 prompt 路径；`domain_standard` 与 `score_standard` 在运行时按领域拼入 `score_batch` |
+| `prompts.domains` | mapping | 所有声明的领域均启用；映射声明顺序决定处理和推送顺序，每项配置领域归类、评分和汇总 prompt 路径，`immediate_push` 可选，未配置的领域不做即时推送；`domain_standard` 与 `score_standard` 在运行时按领域拼入 `score_batch` |
 
 主模型发生 `asyncio.TimeoutError` 或 `aiohttp.ClientError` 时，沿用可重试 HTTP 状态码的 `max_retries` 与指数退避策略；尝试耗尽后，允许兜底且配置了 `llm.fallback` 时请求该端点一次。兜底超时或网络异常不会重试；`401`、`404` 等不可重试状态码仍直接结束主模型尝试。评分、即时快讯和汇总的失败文本统一为 `异常类型名: 消息`，即时快讯和汇总的异常通知复用日志中的错误文本。
 
@@ -359,8 +363,8 @@ sources:
 
 1. 在 `prompts/score/<domain>/domain_standard.md` 写领域归类标准，在 `prompts/score/<domain>/score_standard.md` 写评分标准。
 2. 在 `prompts/digest/<domain>/digest.md` 写该领域的汇总 prompt。
-3. 在 `prompts/immediate/<domain>/immediate_push.md` 写该领域的即时推送 prompt。
-4. 在 `config.yaml` 的 `llm.prompts.domains` 增加以领域名为键的映射项，并配置 `domain_standard`、`score_standard`、`digest`、`immediate_push`。
+3. 需要即时推送时，在 `prompts/immediate/<domain>/immediate_push.md` 写该领域的即时推送 prompt。
+4. 在 `config.yaml` 的 `llm.prompts.domains` 增加以领域名为键的映射项，配置 `domain_standard`、`score_standard`、`digest`，需要即时推送时再配置 `immediate_push`。
 
 ### 添加新的推送平台
 
@@ -375,6 +379,8 @@ sources:
 - AI 评分标准：`prompts/score/ai/score_standard.md`
 - 投资领域归类标准：`prompts/score/investment/domain_standard.md`
 - 投资评分标准：`prompts/score/investment/score_standard.md`
+- 变现领域归类标准：`prompts/score/monetization/domain_standard.md`
+- 变现评分标准：`prompts/score/monetization/score_standard.md`
 
 ## 常见问题
 
@@ -393,10 +399,11 @@ sources:
 
 检查：
 
-1. `filter.hot_threshold` 是否过高。
-2. 抓取结果中是否有条目的 `score` 达到阈值。
-3. 推送内容是否被 LLM 判定为重复并返回 `[NO_NEW_CONTENT]`。
-4. 推送平台是否启用且环境变量存在。
+1. 该领域是否配置了 `immediate_push`。
+2. `filter.hot_threshold` 是否过高。
+3. 抓取结果中是否有条目的 `score` 达到阈值。
+4. 推送内容是否被 LLM 判定为重复并返回 `[NO_NEW_CONTENT]`。
+5. 推送平台是否启用且环境变量存在。
 
 ### 定时推送没有收到？
 
@@ -432,10 +439,13 @@ ai-daily/
 │   │   ├── ai/domain_standard.md
 │   │   ├── ai/score_standard.md
 │   │   ├── investment/domain_standard.md
-│   │   └── investment/score_standard.md
+│   │   ├── investment/score_standard.md
+│   │   ├── monetization/domain_standard.md
+│   │   └── monetization/score_standard.md
 │   └── digest/
 │       ├── ai/digest.md
-│       └── investment/digest.md
+│       ├── investment/digest.md
+│       └── monetization/digest.md
 ├── tests/
 │   └── test_flow.py
 ├── resources/
