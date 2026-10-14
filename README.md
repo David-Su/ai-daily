@@ -9,7 +9,7 @@
 - **RSS 聚合**：从 `resources/rss.opml` 和自定义 RSS 源抓取内容，支持源级屏蔽和域名通配符屏蔽。
 - **分领域评分**：LLM 按 `AI`、`Investment`、`Monetization` 等启用领域批量评分，并写入 `domain`、`score`、`tags`、`summary`。
 - **即时推送**：配置了 `immediate_push` 的领域，达到 `hot_threshold` 的热点内容会立即生成快讯，避免错过高价值信息。
-- **定时汇总**：按 cron 时间把近期高分内容按 domain 独立生成日报/投资摘要。
+- **定时汇总**：按 cron 时间把近期高分内容按 domain 独立生成日报、投资摘要与变现精选。
 - **多平台推送**：支持 Discord Webhook、飞书机器人和 Gmail SMTP。
 - **本地归档**：抓取、即时推送和汇总推送都会保存在 `news-data/`，方便追溯和查重。
 
