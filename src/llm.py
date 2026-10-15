@@ -41,14 +41,14 @@ def _count_digest_tokens(prompt: str) -> int:
     return len(tiktoken.get_encoding("o200k_base").encode(prompt))
 
 
-def _digest_entry_removal_key(entry: Dict) -> Tuple[str, float]:
-    """按最早发布时间、最低分数确定超额时的移除顺序。"""
+def _digest_entry_removal_key(entry: Dict) -> Tuple[float, str]:
+    """超额时优先移除低分条目，同分时优先移除较旧条目。"""
     published = str(entry.get("published") or entry.get("fetched_at") or "")
     try:
         score = float(entry.get("score") or 0)
     except (TypeError, ValueError):
         score = 0
-    return published, score
+    return score, published
 
 
 def load_prompt(prompt_path: str, **kwargs) -> str:

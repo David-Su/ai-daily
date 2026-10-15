@@ -26,22 +26,12 @@ def _llm_config(**overrides):
 
 
 @pytest.mark.asyncio
-async def test_digest_removes_oldest_then_lowest_score_until_within_token_limit(
+async def test_digest_removes_lowest_score_then_oldest_until_within_token_limit(
     monkeypatch, capsys
 ):
     import src.llm as llm_module
 
     entries = [
-        {
-            "title": "old-low",
-            "link": "https://example.com/old-low",
-            "published": "2026-07-01T00:00:00+08:00",
-            "source": "Example",
-            "content": "old-low",
-            "tags": [],
-            "score": 60,
-            "summary": "old-low",
-        },
         {
             "title": "old-high",
             "link": "https://example.com/old-high",
@@ -53,9 +43,19 @@ async def test_digest_removes_oldest_then_lowest_score_until_within_token_limit(
             "summary": "old-high",
         },
         {
+            "title": "old-low",
+            "link": "https://example.com/old-low",
+            "published": "2026-07-02T00:00:00+08:00",
+            "source": "Example",
+            "content": "old-low",
+            "tags": [],
+            "score": 10,
+            "summary": "old-low",
+        },
+        {
             "title": "new-low",
             "link": "https://example.com/new-low",
-            "published": "2026-07-02T00:00:00+08:00",
+            "published": "2026-07-03T00:00:00+08:00",
             "source": "Example",
             "content": "new-low",
             "tags": [],
@@ -76,14 +76,14 @@ async def test_digest_removes_oldest_then_lowest_score_until_within_token_limit(
     monkeypatch.setattr(llm_module, "_count_digest_tokens", fake_count_tokens)
     monkeypatch.setattr(llm_module, "call_llm", fake_call_llm)
 
-    custom_llm = _llm_config(digest_max_input_tokens=1)
+    custom_llm = _llm_config(digest_max_input_tokens=2)
     config_module._app_config = get_config().model_copy(update={"llm": custom_llm})
     result = await compose_digest(entries, [], domain="AI")
 
     assert result == "# Digest"
-    assert "new-low" in captured["prompt"]
+    assert "old-high" in captured["prompt"]
     assert "old-low" not in captured["prompt"]
-    assert "old-high" not in captured["prompt"]
-    assert "[AI] token裁剪 | 上限: 1, 最终: 1, 保留: 1 条, 移除: 2 条" in (
+    assert "new-low" in captured["prompt"]
+    assert "[AI] token裁剪 | 上限: 2, 最终: 2, 保留: 2 条, 移除: 1 条" in (
         capsys.readouterr().out
     )
