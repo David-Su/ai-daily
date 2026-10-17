@@ -371,12 +371,14 @@ def test_config_interface_and_prompt_files():
     prompts = config.llm.prompts
     assert Path(prompts.score_batch).exists()
 
-    assert list(prompts.domains) == ["AI", "Investment"]
+    assert list(prompts.domains) == ["AI", "Investment", "Monetization"]
     for domain_config in prompts.domains.values():
         assert Path(domain_config.domain_standard).exists()
         assert Path(domain_config.score_standard).exists()
         assert Path(domain_config.digest).exists()
-        assert Path(domain_config.immediate_push).exists()
+        if domain_config.immediate_push:
+            assert Path(domain_config.immediate_push).exists()
+    assert prompts.domains["Monetization"].immediate_push is None
 
 
 def test_load_config_rejects_incomplete_domain_prompt_mapping(tmp_path, caplog):
@@ -390,6 +392,19 @@ def test_load_config_rejects_incomplete_domain_prompt_mapping(tmp_path, caplog):
             load_config(str(path))
 
     assert "llm.prompts.domains.AI.digest" in caplog.text
+
+
+def test_domain_without_immediate_push_passes_validation(tmp_path):
+    from src.config import _validate_local_resources
+
+    raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    del raw["llm"]["prompts"]["domains"]["AI"]["immediate_push"]
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(raw, allow_unicode=True), encoding="utf-8")
+
+    config = _validate_local_resources(load_config(str(path)), ROOT)
+
+    assert config.llm.prompts.domains["AI"].immediate_push is None
 
 
 def test_load_config_rejects_legacy_domain_schema(tmp_path, caplog):
@@ -406,8 +421,10 @@ def test_load_config_rejects_legacy_domain_schema(tmp_path, caplog):
 
 
 def test_declared_domain_order_controls_processing_order():
-    assert get_domain_order() == ["AI", "Investment"]
-    assert sort_domains(["Investment", "AI"]) == ["AI", "Investment"]
+    assert get_domain_order() == ["AI", "Investment", "Monetization"]
+    assert sort_domains(["Monetization", "Investment", "AI"]) == [
+        "AI", "Investment", "Monetization"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1774,6 +1791,59 @@ async def test_fetch_job_excludes_unconfigured_domain_results(tmp_path, monkeypa
     assert [entry["domain"] for entry in read_entries(str(fetch_file))] == [
         configured_domain
     ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_job_skips_immediate_push_for_domain_without_prompt(
+    tmp_path, monkeypatch
+):
+    import src.main as main_module
+
+    config = _config()
+    domains = dict(config.llm.prompts.domains)
+    domain = next(iter(domains))
+    domains[domain] = domains[domain].model_copy(update={"immediate_push": None})
+    prompts = config.llm.prompts.model_copy(update={"domains": domains})
+    llm = config.llm.model_copy(update={"prompts": prompts})
+    _install_config(config.model_copy(update={"llm": llm}))
+
+    raw_entry = {
+        "title": "Hot entry",
+        "link": "https://example.com/hot",
+        "published": datetime.now(timezone.utc),
+        "source": "Example",
+        "content": "Hot content",
+    }
+    fetch_file = tmp_path / "fetch.json"
+
+    async def fake_fetch_all_feeds(_sources, _cutoff):
+        return [raw_entry]
+
+    async def fake_score_batch(entries):
+        return [
+            {**entries[0], "domain": domain, "score": 100, "summary": "Hot", "tags": []}
+        ], []
+
+    async def fail_generate_immediate_push(*_args, **_kwargs):
+        raise AssertionError("未配置 immediate_push 的 domain 不应生成即时推送")
+
+    monkeypatch.setattr(
+        main_module,
+        "merge_sources",
+        lambda: [{"xmlUrl": "https://example.com/feed"}],
+    )
+    monkeypatch.setattr(main_module, "fetch_all_feeds", fake_fetch_all_feeds)
+    monkeypatch.setattr(main_module, "score_batch", fake_score_batch)
+    monkeypatch.setattr(main_module, "get_fetch_file", lambda: str(fetch_file))
+    monkeypatch.setattr(main_module, "cleanup_old_files", lambda **_kwargs: None)
+    monkeypatch.setattr(main_module, "is_immediate_push_forbidden", lambda: False)
+    monkeypatch.setattr(
+        main_module, "generate_immediate_push", fail_generate_immediate_push
+    )
+
+    await run_fetch_job()
+
+    assert [entry["domain"] for entry in read_entries(str(fetch_file))] == [domain]
 
 
 def test_notify_titles_are_scoped_by_domain(tmp_path):

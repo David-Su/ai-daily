@@ -84,6 +84,11 @@ llm:
         score_standard: prompts/score/investment/score_standard.md
         digest: prompts/digest/investment/digest.md
         immediate_push: prompts/immediate/investment/immediate_push.md
+      # 不配置 immediate_push：变现内容时效性弱，只进定时汇总
+      Monetization:
+        domain_standard: prompts/score/monetization/domain_standard.md
+        score_standard: prompts/score/monetization/score_standard.md
+        digest: prompts/digest/monetization/digest.md
     score_batch: prompts/score/score_batch.md
 
 # 推送平台，enabled 为 true 且配置校验通过才发送
@@ -143,6 +148,61 @@ sources:
     - title: 商界新闻
       xmlUrl: https://plink.anyfeeder.com/jiemian/business
       category: Startups
+    # 变现：个人与小团队的经验分享、社区讨论
+    - title: V2EX 分享创造
+      xmlUrl: https://www.v2ex.com/feed/create.xml
+      category: Monetization
+    - title: V2EX 独立开发者
+      xmlUrl: https://www.v2ex.com/feed/isv.xml
+      category: Monetization
+    - title: V2EX 创造者
+      xmlUrl: https://www.v2ex.com/feed/starter.xml
+      category: Monetization
+    - title: V2EX 商业模式
+      xmlUrl: https://www.v2ex.com/feed/business.xml
+      category: Monetization
+    - title: V2EX 奇思妙想
+      xmlUrl: https://www.v2ex.com/feed/ideas.xml
+      category: Monetization
+    - title: V2EX 创业组队
+      xmlUrl: https://www.v2ex.com/feed/meet.xml
+      category: Monetization
+    - title: V2EX AI SaaS 产品推荐
+      xmlUrl: https://www.v2ex.com/feed/aisaas.xml
+      category: Monetization
+    - title: V2EX 搜索引擎优化
+      xmlUrl: https://www.v2ex.com/feed/seo.xml
+      category: Monetization
+    - title: Pieter Levels
+      xmlUrl: https://levels.io/rss/
+      category: Monetization
+    - title: Justin Jackson
+      xmlUrl: https://justinjackson.ca/feed
+      category: Monetization
+    - title: Niche Pursuits
+      xmlUrl: https://www.nichepursuits.com/feed/
+      category: Monetization
+    - title: Creator Science
+      xmlUrl: https://www.creatorscience.com/feed
+      category: Monetization
+    - title: DecoHack 独立产品灵感周刊
+      xmlUrl: https://decohack.com/feed
+      category: Monetization
+    - title: HN mentions MRR
+      xmlUrl: https://hnrss.org/newest?q=MRR
+      category: Monetization
+    - title: Reddit - SideProject
+      xmlUrl: https://www.reddit.com/r/SideProject/.rss
+      category: Monetization
+    - title: Reddit - Entrepreneur
+      xmlUrl: https://www.reddit.com/r/Entrepreneur/.rss
+      category: Monetization
+    - title: The SaaS Podcast
+      xmlUrl: https://feeds.transistor.fm/the-saas-podcast-real-lessons-on-growing-profitable-saas
+      category: Monetization
+    - title: MicroConf On Air
+      xmlUrl: https://feeds.castos.com/8vqr
+      category: Monetization
   # 按 xmlUrl 屏蔽单个源
   block:
     - xmlUrl: https://dev.to/feed

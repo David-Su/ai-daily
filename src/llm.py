@@ -114,9 +114,13 @@ async def call_llm(
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
     }
-    # 评分与即时快讯输出简单，默认推理会产生大量推理 token 并拖慢请求
+
     if tier == ModelTier.LOW:
+        # 评分与即时快讯输出简单，默认推理会产生大量推理 token 并拖慢请求
         payload["reasoning_effort"] = "low"
+    elif tier == ModelTier.MEDIUM:
+        payload["temperature"] = 0.8
+
     if response_format is not None:
         payload["response_format"] = response_format
 
@@ -533,7 +537,7 @@ async def generate_immediate_push(
     config = get_config().llm
     try:
         prompts = config.prompts.domains.get((domain or "").strip())
-        if not prompts:
+        if not prompts or not prompts.immediate_push:
             raise ValueError(f"未配置 domain={domain or ''} 的 immediate_push prompt")
 
         new_entries = _get_push_prompt_entries(entries)
