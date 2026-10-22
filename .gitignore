@@ -30,11 +30,8 @@ news-data/
 
 
 # Claude/其他代理数据
-.omc/
-.claude/
-.agents/
 .headroom/
-.opencode/
+.openspec
 
 resources/rss.opml
 resources/rss.opml.bak
